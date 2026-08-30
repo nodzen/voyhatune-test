@@ -128,6 +128,20 @@ final class MediaControlPolicy {
         return plannedKey == KEY_PAUSE && musicActive ? KEY_PLAY_PAUSE : plannedKey;
     }
 
+    /**
+     * With no Android MediaSession, active audio belongs to a source routed only by the original
+     * Qinggan key path (typically OEM/Bluetooth). A physical wheel PLAY_PAUSE uses that path too;
+     * sending standard Android key 85 instead can merely mute during the door fade and then keep
+     * playing when volume is restored.
+     */
+    static boolean useNativeQingganPausePath(String packageName, int playbackClass,
+                                             int keyCode, boolean musicActive) {
+        return musicActive
+                && keyCode == KEY_PLAY_PAUSE
+                && playbackClass == STATE_UNKNOWN
+                && (packageName == null || packageName.isEmpty());
+    }
+
     static boolean isBridgePackage(String packageName) {
         String pkg = packageName == null ? "" : packageName.toLowerCase(Locale.US);
         return pkg.contains("carplay")

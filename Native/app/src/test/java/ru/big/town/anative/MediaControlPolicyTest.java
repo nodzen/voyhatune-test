@@ -91,6 +91,26 @@ public class MediaControlPolicyTest {
     }
 
     @Test
+    public void activeAudioWithoutAndroidSessionUsesOriginalQingganPausePath() {
+        org.junit.Assert.assertTrue(MediaControlPolicy.useNativeQingganPausePath(
+                "", MediaControlPolicy.STATE_UNKNOWN,
+                MediaControlPolicy.KEY_PLAY_PAUSE, true));
+    }
+
+    @Test
+    public void knownBridgeOrInactiveAudioStaysOnTargetedAndroidPath() {
+        org.junit.Assert.assertFalse(MediaControlPolicy.useNativeQingganPausePath(
+                "com.thunder.carplay", MediaControlPolicy.STATE_UNKNOWN,
+                MediaControlPolicy.KEY_PLAY_PAUSE, true));
+        org.junit.Assert.assertFalse(MediaControlPolicy.useNativeQingganPausePath(
+                "", MediaControlPolicy.STATE_UNKNOWN,
+                MediaControlPolicy.KEY_PLAY_PAUSE, false));
+        org.junit.Assert.assertFalse(MediaControlPolicy.useNativeQingganPausePath(
+                "", MediaControlPolicy.STATE_UNKNOWN,
+                MediaControlPolicy.KEY_PAUSE, true));
+    }
+
+    @Test
     public void ordinaryActivePlayerUsesTransportPauseWhenAdvertised() {
         MediaControlPolicy.Plan plan = MediaControlPolicy.plan(
                 candidate("yandex", MediaControlPolicy.STATE_ACTIVE, true, false, false),

@@ -26,6 +26,7 @@ Java.perform(function () {
     var mediaPress = {};
     var readerOnKeyEvent = null;
     var readerInstance = null;
+    var readerDiscoveryRunning = false;
     var mediaProxyReceiver = null;
     var mediaProxyInstalled = false;
 
@@ -126,6 +127,43 @@ Java.perform(function () {
         return true;
     }
 
+    function retainReader(instance, source) {
+        if (readerInstance !== null || instance === null) return readerInstance !== null;
+        try {
+            readerInstance = Java.retain(instance);
+            Log.i(TAG, "[swk] KeyManagerReader captured via " + source);
+            return true;
+        } catch (e) {
+            Log.e(TAG, "[swk] retain KeyManagerReader via " + source + " err: " + e);
+            return false;
+        }
+    }
+
+    // Door pause can be the first synthetic key after boot, before the user has touched the wheel.
+    // Discover the already-live reader proactively; onKeyEvent below remains the fallback for a
+    // reader created later. A few spaced scans cover injection racing keymanager initialization.
+    function discoverReader(attempt) {
+        if (readerInstance !== null || readerDiscoveryRunning) return;
+        readerDiscoveryRunning = true;
+        try {
+            Java.choose("com.qinggan.keymanager.service.engine.KeyManagerReader", {
+                onMatch: function (instance) {
+                    if (retainReader(instance, "heap scan")) return "stop";
+                },
+                onComplete: function () {
+                    readerDiscoveryRunning = false;
+                    if (readerInstance === null && attempt < 4) {
+                        var delays = [250, 750, 2000, 5000];
+                        setTimeout(function () { discoverReader(attempt + 1); }, delays[attempt]);
+                    }
+                }
+            });
+        } catch (e) {
+            readerDiscoveryRunning = false;
+            Log.e(TAG, "[swk] KeyManagerReader discovery attempt " + attempt + " err: " + e);
+        }
+    }
+
     // Door PAUSE_ONLY asks keymanager to reproduce the path proven by a physical button. Native QG
     // recreation is allowed only for confirmed active playback and only QG6/PLAY_PAUSE.
     function syntheticNativePlayPause() {
@@ -189,9 +227,21 @@ Java.perform(function () {
                                         Log.w(TAG, "[swk] MEDIA_KEY_PROXY rejected nativeQG kc=" + keyCode);
                                         return;
                                     }
+                                    if (nativeQG && (readerInstance === null || readerOnKeyEvent === null)) {
+                                        Log.i(TAG, "[swk] MEDIA_KEY_PROXY nativeQG: reader unavailable before claim");
+                                        return;
+                                    }
+                                    // Claim before executing the semantic command. If the post-command
+                                    // acknowledgement itself failed, Native would otherwise send a
+                                    // second PLAY_PAUSE fallback and immediately resume the player.
+                                    // Once execution is attempted, never opt back into fallback: an
+                                    // exception cannot prove the first command had no side effect.
+                                    this.setResultCode(MEDIA_PROXY_ACK);
                                     var handled = nativeQG
                                         ? syntheticNativePlayPause() : dispatchMedia(keyCode);
-                                    if (handled) this.setResultCode(MEDIA_PROXY_ACK);
+                                    if (!handled) {
+                                        Log.w(TAG, "[swk] MEDIA_KEY_PROXY claimed command failed; no duplicate fallback");
+                                    }
                                 } catch (e) {
                                     Log.e(TAG, "[swk] MEDIA_KEY_PROXY err: " + e);
                                 }
@@ -282,8 +332,7 @@ Java.perform(function () {
         readerOnKeyEvent = Reader.onKeyEvent.overload("android.view.KeyEvent");
         readerOnKeyEvent.implementation = function (ke) {
             if (readerInstance === null) {
-                try { readerInstance = Java.retain(this); }
-                catch (e) { Log.e(TAG, "[swk] retain KeyManagerReader err: " + e); }
+                retainReader(this, "onKeyEvent");
             }
             var code = ke.getKeyCode();
             Log.i(TAG, "key press: " + code + " action: " + ke.getAction())
@@ -336,6 +385,7 @@ Java.perform(function () {
             }
             return readerOnKeyEvent.call(this, ke);     // штатное действие кнопки
         };
+        discoverReader(0);
         installMediaProxyReceiver(0);
         Log.i(TAG, "[swk] keymanager hooks installed: STAR DVR VOICE PHONE media=3/4/6 (LONG_MS=" + LONG_MS + ")");
     } catch (e) {

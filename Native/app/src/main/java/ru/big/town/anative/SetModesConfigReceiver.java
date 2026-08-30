@@ -15,11 +15,18 @@ import java.lang.reflect.Method;
  */
 public class SetModesConfigReceiver extends BroadcastReceiver {
     private static final String TAG = "$$$ SetModesConfig $$$";
+    public static final String ACTION_DOOR_MEDIA_PAUSE_CHANGED =
+            "ru.big.town.anative.DOOR_MEDIA_PAUSE_CHANGED";
 
     @Override
     public void onReceive(Context context, Intent intent) {
-        if (!BuildConfig.IS_FULL) return;
+        if (intent == null) return;
         String action = intent.getAction();
+        if (ACTION_DOOR_MEDIA_PAUSE_CHANGED.equals(action)) {
+            applyDoorMediaPause(context, intent.getBooleanExtra("enabled", false));
+            return;
+        }
+        if (!BuildConfig.IS_FULL) return;
         if ("ru.big.town.anative.STEER_CONFIG".equals(action)) {
             String[] buttons = {"Star", "Dvr", "Voice", "Phone"};
             boolean needsBackService = false;
@@ -53,6 +60,22 @@ public class SetModesConfigReceiver extends BroadcastReceiver {
         } else if ("ru.big.town.anative.KEYBOARD_CONFIG".equals(action)) {
             applyKeyboardMode(context, intent.getStringExtra("keyboardMode"));
         }
+    }
+
+    /** Applies the door-media switch immediately; the next settings query remains the source-of-truth refresh. */
+    private static void applyDoorMediaPause(Context context, boolean enabled) {
+        if (context == null) return;
+        context.getSharedPreferences("NativePrefs", Context.MODE_PRIVATE)
+                .edit().putBoolean("pauseMediaOnDoor", enabled).apply();
+        boolean wiperEnabled = context.getSharedPreferences("NativePrefs", Context.MODE_PRIVATE)
+                .getBoolean("wiperCold", false);
+        Intent service = new Intent(context, WiperColdService.class);
+        if (enabled || wiperEnabled) {
+            context.startForegroundService(service);
+        } else {
+            context.stopService(service);
+        }
+        Log.i(TAG, "DOOR_MEDIA_PAUSE_CHANGED=" + enabled + "; service consumer wiper=" + wiperEnabled);
     }
 
     private static void applyKeyboardMode(Context context, String requestedMode) {
