@@ -467,7 +467,12 @@ public class WiperColdService extends Service {
             if (keyCode != result.keyCode) {
                 Log.i(TAG, "dispatchDoorPause: active music stream confirms safe PLAY_PAUSE fallback");
             }
-            sendMediaProxy(keyCode, false, am, workGeneration);
+            boolean nativeQinggan = MediaControlPolicy.useNativeQingganPausePath(
+                    result.packageName, result.playbackClass, keyCode, musicActive);
+            if (nativeQinggan) {
+                Log.i(TAG, "dispatchDoorPause: no Android session, using original Qinggan PLAY_PAUSE path");
+            }
+            sendMediaProxy(keyCode, nativeQinggan, am, workGeneration);
             return;
         }
         if (MediaControlRouter.ROUTE_NATIVE.equals(result.route)) {

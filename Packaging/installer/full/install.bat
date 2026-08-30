@@ -7,6 +7,14 @@ if "%HOOK_UPDATE_BARRIER_ARMED%"=="1" if not "%FULL_INSTALL_RESULT%"=="0" (
     echo   WARNING: installation stopped after hook freeze; trying to restart voyahtune_load.
     adb.exe shell "setprop ctl.start voyahtune_load 2>/dev/null || true" 1>nul 2>nul
 )
+echo.
+if "%FULL_INSTALL_RESULT%"=="0" (
+    echo === Installation completed successfully. ===
+) else (
+    echo === Installation failed with code %FULL_INSTALL_RESULT%. Review the messages above. ===
+)
+echo Press any key to close this window...
+pause >nul
 exit /b %FULL_INSTALL_RESULT%
 
 :install_main
@@ -16,8 +24,8 @@ for %%F in (adb.exe AdbWinApi.dll AdbWinUsbApi.dll load.bin steeringwheelkeys.js
     exit /b 1
 )
 
-rem Manifest is the exact atomic commit record. Built-in certutil hashes every source, then a fixed
-rem twelve-line v1 document is normalized and compared byte-for-byte before the first ADB call.
+rem Manifest is the exact atomic commit record. PowerShell performs the primary Unicode-safe check;
+rem built-in certutil remains the fallback for older Windows installations without PowerShell.
 call :verify_hook_manifest
 if errorlevel 1 (
     echo !!! Hook manifest does not match the injected scripts. The device was not changed.
@@ -227,6 +235,21 @@ exit /b 0
 goto :eof
 
 :verify_hook_manifest
+where powershell.exe 1>nul 2>nul
+if errorlevel 1 goto :verify_hook_manifest_certutil
+set "VOYAHTUNE_MANIFEST_ROOT=%CD%"
+call :verify_hook_manifest_powershell
+set "HOOK_VERIFY_RESULT=%ERRORLEVEL%"
+set "VOYAHTUNE_MANIFEST_ROOT="
+if "%HOOK_VERIFY_RESULT%"=="2" goto :verify_hook_manifest_certutil
+exit /b %HOOK_VERIFY_RESULT%
+
+:verify_hook_manifest_powershell
+powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; try { $root=[Environment]::GetEnvironmentVariable('VOYAHTUNE_MANIFEST_ROOT'); $expected=@([pscustomobject]@{id='vd-bypass';process='system_server';script='vd_bypass.js'},[pscustomobject]@{id='steering-wheel';process='com.qinggan.keymanager.service';script='steeringwheelkeys.js'},[pscustomobject]@{id='launcher-dock';process='com.qinggan.app.launcher';script='launcherdock.js'},[pscustomobject]@{id='multi-display';process='com.qinggan.systemservice';script='multidisplay.js'},[pscustomobject]@{id='apollo-tech';process='com.qinggan.app.vehiclesetting';script='apollo_tech.js'},[pscustomobject]@{id='keyboard-en';process='com.qinggan.app.qgime';script='keyboard_lock_en.js'},[pscustomobject]@{id='keyboard-ru';process='com.qinggan.app.qgime';script='keyboard_ru.js'}); $manifestPath=Join-Path -Path $root -ChildPath 'voyahtune-hook-manifest.json'; $manifest=Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json; $hooks=@($manifest.hooks); if ([int]$manifest.schemaVersion -ne 1 -or $hooks.Count -ne $expected.Count) { Write-Host ('!!! Invalid hook manifest schema/count: schema=' + $manifest.schemaVersion + ' hooks=' + $hooks.Count); exit 1 }; for ($i=0; $i -lt $expected.Count; $i++) { $e=$expected[$i]; $h=$hooks[$i]; if (([string]$h.id) -cne $e.id -or ([string]$h.process) -cne $e.process -or ([string]$h.script) -cne $e.script -or ([string]$h.sha256) -cnotmatch '^[0-9a-f]{64}$') { Write-Host ('!!! Hook manifest mapping mismatch at entry ' + ($i + 1) + ': expected ' + $e.id + '/' + $e.process + '/' + $e.script); exit 1 }; $sourcePath=Join-Path -Path $root -ChildPath $e.script; $actual=(Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash.ToLowerInvariant(); if ($actual -cne ([string]$h.sha256)) { Write-Host ('!!! SHA-256 mismatch for ' + $e.script); Write-Host ('    expected: ' + $h.sha256); Write-Host ('    actual:   ' + $actual); exit 1 } }; exit 0 } catch { Write-Host ('!!! Unicode-safe manifest verification unavailable: ' + $_.Exception.Message); exit 2 }"
+exit /b %ERRORLEVEL%
+
+:verify_hook_manifest_certutil
+echo   Using certutil manifest verification fallback.
 setlocal DisableDelayedExpansion
 set "HOOK_VERIFY_PREFIX=%TEMP%\voyahtune-hook-%RANDOM%-%RANDOM%"
 set "HOOK_EXPECTED_MANIFEST=%HOOK_VERIFY_PREFIX%.expected"
@@ -309,6 +332,7 @@ endlocal & set "%~2=%HOOK_HASH_LINE%"
 exit /b 0
 
 :compute_sha256_failed
+echo !!! Could not compute a valid SHA-256 for %~1 with certutil.
 del "!HOOK_HASH_TEMP!" 1>nul 2>nul
 endlocal
 exit /b 1

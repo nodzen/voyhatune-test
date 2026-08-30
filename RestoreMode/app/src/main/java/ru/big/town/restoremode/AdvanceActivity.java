@@ -115,6 +115,10 @@ public class AdvanceActivity extends AppCompatActivity {
     static final int MSG_SET_THEME          = 28;
     static final int MSG_APPLY_FORCED_EV    = 35;
     private static final String NATIVE_PACKAGE = "ru.big.town.anative";
+    private static final String ACTION_DOOR_MEDIA_PAUSE_CHANGED =
+            "ru.big.town.anative.DOOR_MEDIA_PAUSE_CHANGED";
+    private static final String NATIVE_CONFIG_PERMISSION =
+            "ru.big.town.anative.permission.BIND_SET_MODES_SERVICE";
 
     private static final String ACTION_BATTERY_HEAT_AUTO_CHANGED =
             "ru.big.town.anative.BATTERY_HEAT_AUTO_CHANGED";
@@ -523,13 +527,18 @@ public class AdvanceActivity extends AppCompatActivity {
         switchWiperCold.setOnCheckedChangeListener((b, checked) ->
                 prefs.edit().putBoolean("wiperColdMode", checked).apply());
 
-        // «Пауза музыки при открытии двери водителя»: флаг читает Native из ContentProvider (колонка 18)
-        // и старт/стоп сервиса-реактора двери — broadcast не нужен, применяется на ближайшем чтении настроек.
+        // «Пауза музыки при открытии двери водителя»: кроме локального источника настроек, сразу
+        // сообщаем Native, иначе его NativePrefs могли оставаться со старым значением до пробуждения.
         Switch switchPauseMedia = findViewById(R.id.switchPauseMediaOnDoor);
         if (switchPauseMedia != null) {
             switchPauseMedia.setChecked(prefs.getBoolean("pauseMediaOnDoor", false));
-            switchPauseMedia.setOnCheckedChangeListener((b, checked) ->
-                    prefs.edit().putBoolean("pauseMediaOnDoor", checked).apply());
+            switchPauseMedia.setOnCheckedChangeListener((b, checked) -> {
+                prefs.edit().putBoolean("pauseMediaOnDoor", checked).apply();
+                Intent changed = new Intent(ACTION_DOOR_MEDIA_PAUSE_CHANGED)
+                        .setClassName(NATIVE_PACKAGE, "ru.big.town.anative.SetModesConfigReceiver")
+                        .putExtra("enabled", checked);
+                sendBroadcast(changed, NATIVE_CONFIG_PERMISSION);
+            });
         }
 
         // Раздел «Другое»: тоггл «Режим отладки»
