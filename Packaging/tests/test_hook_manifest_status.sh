@@ -110,6 +110,7 @@ full_sh_mutation=$(line_first "$FULL_INSTALL" 'if ! adb shell settings put globa
     || fail "full install.sh freeze is not after verity reboot and before hook mutation"
 require "$FULL_INSTALL" "adb shell 'setprop ctl.start voyahtune_load"
 require "$FULL_INSTALL" 'HOOK_UPDATE_BARRIER_ARMED=0'
+require "$FULL_INSTALL" 'if ! configure_yandex_dns; then'
 
 [ "$(grep -Ec '^adb[.]exe reboot' "$FULL_INSTALL_BAT")" -eq 2 ] \
     || fail "full install.bat must have only verity and final reboots"
@@ -131,6 +132,8 @@ require "$FULL_INSTALL_BAT" 'echo === Installation completed successfully. ==='
 require "$FULL_INSTALL_BAT" 'echo === Installation failed with code %FULL_INSTALL_RESULT%. Review the messages above. ==='
 require "$FULL_INSTALL_BAT" 'echo Press any key to close this window...'
 require "$FULL_INSTALL_BAT" 'pause >nul'
+require "$FULL_INSTALL_BAT" 'call "%~dp0install-yandex-dns.bat" configure'
+require "$FULL_INSTALL_BAT" 'framework-res__config_ethernet_interfaces_yandexdns.apk'
 require "$FULL_INSTALL_BAT" 'where powershell.exe 1>nul 2>nul'
 require "$FULL_INSTALL_BAT" "[Environment]::GetEnvironmentVariable('VOYAHTUNE_MANIFEST_ROOT')"
 require "$FULL_INSTALL_BAT" 'Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json'
@@ -217,6 +220,26 @@ light_sh_final_reboot=$(line_first "$LIGHT_INSTALL" 'if ! adb reboot; then')
 if grep -Eq 'rm -f([^;]*[[:space:]])?/data/local/bin/frida-inject([[:space:];]|$)' "$LIGHT_INSTALL"; then
     fail "light install.sh blindly removes the generic frida-inject"
 fi
+
+# DNS is optional in the main installer. Unix uses the shared configure function; Windows uses the
+# existing standalone helper in configure mode without its reboot.
+require "$LIGHT_INSTALL" 'if ! configure_yandex_dns; then'
+require "$LIGHT_INSTALL_BAT" 'call "%~dp0install-yandex-dns.bat" configure'
+require "$LIGHT_INSTALL_BAT" 'framework-res__config_ethernet_interfaces_yandexdns.apk'
+DNS_COMMON="$ROOT/Packaging/installer/common/dns-overlay.sh"
+DNS_INSTALL_SH="$ROOT/Packaging/installer/common/install-yandex-dns.sh"
+require "$DNS_COMMON" 'configure_yandex_dns()'
+require "$DNS_INSTALL_SH" 'configure_yandex_dns'
+require "$DNS_INSTALL_SH" 'YDNS_CHANGED'
+require "$DNS_INSTALL_SH" 'YDNS_ADB" reboot'
+sh -n "$DNS_INSTALL_SH"
+DNS_INSTALL_BAT="$ROOT/Packaging/installer/common/install-yandex-dns.bat"
+require "$DNS_INSTALL_BAT" 'if /i "%YDNS_MODE%"=="configure" goto :configure'
+require "$DNS_INSTALL_BAT" 'choice /C YN /N /M "Install Yandex DNS now? [Y/N]: "'
+require "$DNS_INSTALL_BAT" 'if "%YDNS_REBOOT%"=="0" ('
+require "$DNS_INSTALL_BAT" 'call "%YDNS_HELPER%" install'
+require "$DNS_INSTALL_BAT" 'adb.exe reboot'
+echo "PASS: DNS installation is optional and reuses the existing helper"
 
 [ "$(grep -Ec '^adb[.]exe reboot' "$LIGHT_INSTALL_BAT")" -eq 2 ] \
     || fail "light install.bat must have only verity and final reboots"

@@ -216,6 +216,7 @@ public class BackButtonService extends AccessibilityService {
     }
 
     /** Раскладывает кнопку по выбранной стороне и сохранённому смещению (offset<0 = по центру стороны). */
+    @SuppressWarnings("deprecation")
     private void applyLayout() {
         if (buttonView == null || wm == null || lp == null) return;
         int side = prefs().getInt("floatingBackSide", SIDE_LEFT);
@@ -249,6 +250,7 @@ public class BackButtonService extends AccessibilityService {
         private boolean dragging;
         private final int slop = ViewConfiguration.get(BackButtonService.this).getScaledTouchSlop();
 
+        @SuppressWarnings("deprecation")
         @Override
         public boolean onTouch(View v, MotionEvent e) {
             switch (e.getActionMasked()) {

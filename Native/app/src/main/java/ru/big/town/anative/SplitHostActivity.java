@@ -164,6 +164,7 @@ public class SplitHostActivity extends Activity {
     private final Pane left  = new Pane("L");
     private final Pane right = new Pane("R");
 
+    @SuppressWarnings("deprecation")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);

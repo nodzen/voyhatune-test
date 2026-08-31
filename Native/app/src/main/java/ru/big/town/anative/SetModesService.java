@@ -81,6 +81,10 @@ public class SetModesService extends Service {
     private static final long CAR_POWER_CONNECT_WATCHDOG_MS = 15_000L;
 
     class IncomingHandler extends Handler {
+        IncomingHandler() {
+            super(Looper.getMainLooper());
+        }
+
         @Override
         public void handleMessage(Message msg) {
             switch (msg.what) {

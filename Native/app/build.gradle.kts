@@ -4,12 +4,12 @@ plugins {
 
 android {
     namespace = "ru.big.town.anative"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "ru.big.town.anative"
         minSdk = 30
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0"
 
@@ -33,7 +33,7 @@ android {
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
+            version = "3.31.6"
         }
     }
     buildFeatures {
@@ -53,8 +53,8 @@ android {
             buildConfigField("boolean", "IS_FULL", "false")
         }
     }
-    ndkVersion = "27.0.12077973"
-    buildToolsVersion = "35.0.0"
+    ndkVersion = "29.0.14206865"
+    buildToolsVersion = "36.0.0"
 }
 
 dependencies {
@@ -64,11 +64,10 @@ dependencies {
     implementation(libs.constraintlayout)
     implementation(libs.legacy.support.v4)
     implementation(libs.legacy.support.v13)
-    implementation(files("lib/android.car.jar"))
+    // android.car is supplied by the AAOS/OEM system image; the local jar is compile-time only.
+    compileOnly(files("lib/android.car.jar"))
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)
     androidTestImplementation(libs.espresso.core)
 
-    val sdkDir = project.android.sdkDirectory.canonicalPath
-    val androidCarJar = "$sdkDir/platforms/android-35/optional/android.car.jar"
 }

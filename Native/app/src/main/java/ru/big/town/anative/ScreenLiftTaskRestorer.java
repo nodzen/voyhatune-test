@@ -220,6 +220,7 @@ final class ScreenLiftTaskRestorer implements AutoCloseable {
         }
     }
 
+    @SuppressWarnings("deprecation")
     private List<ActivityManager.RunningTaskInfo> runningTasks() {
         if (activityManager == null) return java.util.Collections.emptyList();
         try {
