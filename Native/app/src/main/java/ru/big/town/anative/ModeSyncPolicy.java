@@ -3,10 +3,10 @@ package ru.big.town.anative;
 /**
  * Android-free state machine separating an OEM wake reset from a real external mode selection.
  *
- * <p>A successful OEM write only means that the request reached the asynchronous Binder task. The
- * car may still publish and apply its default mode later in the wake sequence. Feedback therefore
- * remains read-only until a read-back-verified restore has settled. A conflicting value before that
- * point requests another restore; it is never allowed to replace the saved source of truth.</p>
+ * <p>A successful CAN write only means that the command reached the bus. The car may still publish
+ * and apply its default mode later in the wake sequence. Therefore feedback remains read-only for a
+ * settling interval after restore. A conflicting value in that interval requests another restore;
+ * it is never allowed to replace the saved source of truth.</p>
  */
 final class ModeSyncPolicy {
     static final long POST_RESTORE_SETTLE_MS = 30_000L;
@@ -24,8 +24,6 @@ final class ModeSyncPolicy {
 
     private long generation;
     private boolean restoreCompleted;
-    /** True only when the OEM state was read back after the asynchronous restore task. */
-    private boolean restoreVerified;
     private boolean correctionAllowed;
     private boolean wakeActive;
     private long acceptAfterUptime = Long.MAX_VALUE;
@@ -53,7 +51,6 @@ final class ModeSyncPolicy {
         }
         generation++;
         restoreCompleted = false;
-        restoreVerified = false;
         correctionAllowed = true;
         acceptAfterUptime = Long.MAX_VALUE;
         return generation;
@@ -63,7 +60,6 @@ final class ModeSyncPolicy {
     synchronized long freeze() {
         generation++;
         restoreCompleted = false;
-        restoreVerified = false;
         correctionAllowed = false;
         wakeActive = false;
         acceptAfterUptime = Long.MAX_VALUE;
@@ -81,7 +77,6 @@ final class ModeSyncPolicy {
     synchronized long cancelRestore() {
         generation++;
         restoreCompleted = false;
-        restoreVerified = false;
         correctionAllowed = false;
         acceptAfterUptime = Long.MAX_VALUE;
         return generation;
@@ -91,7 +86,6 @@ final class ModeSyncPolicy {
     synchronized boolean completeUserCommand(long commandGeneration, long nowUptime) {
         if (commandGeneration != generation || !wakeActive) return false;
         restoreCompleted = true;
-        restoreVerified = true;
         correctionAllowed = false;
         acceptAfterUptime = saturatedAdd(nowUptime, POST_RESTORE_SETTLE_MS);
         return true;
@@ -106,7 +100,6 @@ final class ModeSyncPolicy {
     synchronized boolean canPersist(long candidateGeneration, long nowUptime) {
         return candidateGeneration == generation
                 && restoreCompleted
-                && restoreVerified
                 && nowUptime >= acceptAfterUptime;
     }
 
@@ -126,22 +119,11 @@ final class ModeSyncPolicy {
         else expectedDrive = mode;
     }
 
-    /** Completes the matching generation; unverified restores remain correction-only. */
+    /** Opens feedback only after the matching generation has restored and then settled. */
     synchronized boolean completeRestore(long completedGeneration, long nowUptime) {
-        return completeRestore(completedGeneration, nowUptime, true);
-    }
-
-    /** Opens the normal feedback window only after a verified restore read-back. */
-    synchronized boolean completeRestore(long completedGeneration, long nowUptime,
-                                         boolean verified) {
         if (completedGeneration != generation) return false;
         restoreCompleted = true;
-        restoreVerified = verified;
-        // An accepted-but-unconfirmed OEM request must never turn the car's startup ECO into a
-        // new saved preference. Keep the gate logically open for corrective feedback, but do not
-        // allow arbitrary post-settle persistence until a read-back confirms the target.
-        acceptAfterUptime = verified
-                ? saturatedAdd(nowUptime, POST_RESTORE_SETTLE_MS) : Long.MAX_VALUE;
+        acceptAfterUptime = saturatedAdd(nowUptime, POST_RESTORE_SETTLE_MS);
         return true;
     }
 
@@ -149,7 +131,6 @@ final class ModeSyncPolicy {
     synchronized boolean failRestore(long failedGeneration) {
         if (failedGeneration != generation) return false;
         restoreCompleted = false;
-        restoreVerified = false;
         correctionAllowed = false;
         acceptAfterUptime = Long.MAX_VALUE;
         return true;
@@ -158,9 +139,7 @@ final class ModeSyncPolicy {
     synchronized Decision evaluate(boolean energy, String observedMode, long nowUptime) {
         if (!valid(observedMode)) return Decision.IGNORE;
         // The car is a valid source of truth only after the wake-default window has elapsed.
-        if (restoreCompleted && nowUptime >= acceptAfterUptime && restoreVerified) {
-            return Decision.ACCEPT;
-        }
+        if (restoreCompleted && nowUptime >= acceptAfterUptime) return Decision.ACCEPT;
 
         String expected = energy ? expectedEnergy : expectedDrive;
         boolean enabled = energy ? energyEnabled : driveEnabled;

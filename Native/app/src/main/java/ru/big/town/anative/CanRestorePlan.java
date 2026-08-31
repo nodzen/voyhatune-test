@@ -120,23 +120,14 @@ final class CanRestorePlan {
 
         /** Adds an OEM operation which may join the existing bounded stabilization passes. */
         int addOperation(String label, Operation operation, boolean repeatOnNextPass) {
-            return addOperationAfter(label, operation, NO_DEPENDENCY, repeatOnNextPass);
-        }
-
-        /** Adds an OEM operation which is submitted only after another operation is accepted. */
-        int addOperationAfter(String label, Operation operation, int dependency,
-                              boolean repeatOnNextPass) {
             if (label == null || label.isEmpty()) {
                 throw new IllegalArgumentException("CAN command label is empty");
             }
             if (operation == null) {
                 throw new IllegalArgumentException("CAN operation is null for " + label);
             }
-            if (dependency < NO_DEPENDENCY || dependency >= commands.size()) {
-                throw new IllegalArgumentException("Invalid dependency for " + label);
-            }
             commands.add(new Command(
-                    label, null, operation, dependency, repeatOnNextPass));
+                    label, null, operation, NO_DEPENDENCY, repeatOnNextPass));
             return commands.size() - 1;
         }
 
