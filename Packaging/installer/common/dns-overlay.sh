@@ -174,3 +174,51 @@ choose_yandex_dns() {
     YDNS_REQUEST="$ydns_selected"
     return 0
 }
+
+# Configure the optional overlay during an installer run. Both the main Unix installer and the
+# standalone macOS DNS installer call this function, so they always show the same prompt and use
+# the same status/safety checks.
+configure_yandex_dns() {
+    YDNS_CHANGED="0"
+    echo "=== DNS для доступа через T-Box ==="
+    if ! YDNS_CURRENT="$(ydns_query_state)"; then
+        echo "!!! Не удалось определить текущее состояние DNS-overlay — установка отменена."
+        return 1
+    fi
+    case "$YDNS_CURRENT" in
+        on|off|external|broken) ;;
+        *)
+            echo "!!! DNS-overlay helper вернул неизвестное состояние: $YDNS_CURRENT"
+            return 1
+            ;;
+    esac
+    echo "Текущее состояние DNS-overlay: $YDNS_CURRENT"
+
+    if [ "$YDNS_CURRENT" = "on" ]; then
+        echo "DNS-overlay уже включён — оставляем текущее состояние без изменений."
+        return 0
+    fi
+
+    YDNS_REQUEST=
+    if ! choose_yandex_dns "$YDNS_CURRENT"; then
+        echo "!!! Не удалось получить выбор DNS-overlay — установка отменена."
+        return 1
+    fi
+    case "${YDNS_REQUEST:-keep}" in
+        on)
+            install_yandex_dns || {
+                echo "!!! Установка DNS-overlay завершилась ошибкой."
+                return 1
+            }
+            YDNS_CHANGED="1"
+            ;;
+        off|keep)
+            echo "DNS-overlay: оставляем текущее состояние без изменений."
+            ;;
+        *)
+            echo "!!! Неизвестный выбор DNS-overlay: ${YDNS_REQUEST:-<пусто>}"
+            return 1
+            ;;
+    esac
+    return 0
+}

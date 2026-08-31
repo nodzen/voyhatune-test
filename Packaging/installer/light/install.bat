@@ -12,7 +12,7 @@ exit /b %LIGHT_INSTALL_RESULT%
 
 :install_main
 cd /d "%~dp0" || exit /b 1
-for %%F in (adb.exe AdbWinApi.dll AdbWinUsbApi.dll native.apk restore_mode.apk privapp-permissions-ru.big.town.anative.xml) do if not exist "%%F" (
+for %%F in (adb.exe AdbWinApi.dll AdbWinUsbApi.dll native.apk restore_mode.apk privapp-permissions-ru.big.town.anative.xml dns-overlay.bat dns-overlay-device.sh framework-res__config_ethernet_interfaces_yandexdns.apk install-yandex-dns.bat) do if not exist "%%F" (
     echo !!! Required file %%F is missing. The device was not changed.
     exit /b 1
 )
@@ -149,6 +149,12 @@ if errorlevel 1 (
     exit /b 1
 )
 
+call "%~dp0install-yandex-dns.bat" configure
+if errorlevel 1 (
+    echo !!! Optional Yandex DNS configuration failed. The device was not rebooted.
+    exit /b 1
+)
+
 adb.exe reboot
 if errorlevel 1 (
     echo !!! The installation is prepared, but ADB could not reboot the device. Reboot it manually.
@@ -165,7 +171,6 @@ if errorlevel 1 (
     exit /b 1
 )
 echo Installation complete and verified.
-echo Run install-yandex-dns.bat separately if Yandex DNS is required.
 exit /b 0
 goto :eof
 
