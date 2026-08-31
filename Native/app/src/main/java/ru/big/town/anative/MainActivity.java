@@ -142,6 +142,33 @@ public class MainActivity extends AppCompatActivity {
         return arraysStr2arraysBytes(cmds);
     }
 
+    /** Проверенные прямые кадры для специальных состояний, которых нет в VehicleState enum. */
+    public static byte[][] getPedestrianSoundCanCommand(boolean disabled) {
+        return arraysStr2arraysBytes(new String[]{
+                disabled ? "6a 08 00 03 00 00 00 10 7c 00"
+                        : "6a 08 00 03 00 00 00 20 7c 00"
+        });
+    }
+
+    /** Forced EV — отдельный CAN-бит, а не значение обычного IVI_SOC_MODESET. */
+    public static byte[][] getForcedEvCanCommand(boolean on) {
+        return arraysStr2arraysBytes(new String[]{
+                on ? "68 08 02 00 00 f0 2c 54 08 00"
+                        : "68 08 02 00 00 f0 2c 24 08 00"
+        });
+    }
+
+    /** Give the preceding asynchronous OEM task a short chance to finish before a raw final frame. */
+    private static boolean sendLegacyFinalFrame(byte[][] frames, String label) {
+        try {
+            Thread.sleep(250L);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+        return setCanValues(1, frames, label);
+    }
+
     public static boolean sendEnergyModeCommand(Context context, String mode) {
         return sendOemBundleState(context,
                 VehicleRestorePolicy.SOC_MODE, VehicleRestorePolicy.SOC_MODE_ID,
@@ -184,21 +211,7 @@ public class MainActivity extends AppCompatActivity {
 
     /** Немедленно применить форсированный EV (тоггл с главного экрана / из настроек). */
     public static boolean sendForcedEvCommand(boolean on) {
-        Context context = GlobalVars.SAVE_CONTEXT;
-        if (context == null) return false;
-        int target = VehicleRestorePolicy.SOC_FORCE_EV;
-        if (!on) {
-            String savedEnergy = currentSavedMode(context, "energy");
-            try {
-                target = VehicleRestorePolicy.requireEnergy(savedEnergy);
-            } catch (IllegalArgumentException e) {
-                Log.w("$$$ MainActivity forced EV $$$",
-                        "Invalid saved energy target; falling back to EV", e);
-                target = VehicleRestorePolicy.SOC_EV;
-            }
-        }
-        return sendOemBundleState(context,
-                VehicleRestorePolicy.SOC_MODE, VehicleRestorePolicy.SOC_MODE_ID, target,
+        return sendLegacyFinalFrame(getForcedEvCanCommand(on),
                 "forced EV " + (on ? "on" : "off / restore saved energy"));
     }
 
@@ -478,12 +491,8 @@ public class MainActivity extends AppCompatActivity {
 
     /** Немедленно применить звук пешеходов (тоггл с главного экрана). disabled=true → заглушить. */
     public static boolean sendPedestrianSoundCommand(boolean disabled) {
-        return OemVehicleStateTransport.sendVehicleState(
-                GlobalVars.SAVE_CONTEXT,
-                VehicleRestorePolicy.PEDESTRIAN_SOUND,
-                VehicleRestorePolicy.PEDESTRIAN_SOUND_ID,
-                VehicleRestorePolicy.pedestrianSoundState(disabled),
-                "pedestrian sound " + (disabled ? "off" : "on")).accepted();
+        return sendLegacyFinalFrame(getPedestrianSoundCanCommand(disabled),
+                "pedestrian sound " + (disabled ? "off" : "on"));
     }
 
     /**
@@ -546,7 +555,7 @@ public class MainActivity extends AppCompatActivity {
             }
         }
         VehicleRestorePolicy.appendPrimaryTo(
-                primaryValues, energyEnabled, energy, forcedEv);
+                primaryValues, energyEnabled, energy);
         VehicleRestorePolicy.appendRecuperationTo(
                 trailingValues, recycleEnabled, recycle, driveMode);
         stableIds.putAll(VehicleRestorePolicy.stableIds());
@@ -571,9 +580,10 @@ public class MainActivity extends AppCompatActivity {
                     fragrance.duration);
         }
 
+        int snapshotOperation = -1;
         if (!primaryValues.isEmpty() || !trailingValues.isEmpty()) {
             final OemVehicleStateTransport.StateValue firstState = fragranceDurationState;
-            plan.addOperation("OEM vehicle restore snapshot", () ->
+            snapshotOperation = plan.addOperation("OEM vehicle restore snapshot", () ->
                     OemVehicleStateTransport.sendRestoreSequence(
                             context, firstState, primaryValues, trailingValues, stableIds,
                             "drive/energy/fragrance/Apollo entitlements then switches/recuperation")
@@ -583,20 +593,94 @@ public class MainActivity extends AppCompatActivity {
                     repeatOemOnNextPass);
         }
 
-        // Independent TX58: the OEM setter preserves the neighbouring VSP frame fields.
+        // Forced EV is a documented direct frame, not a value in the ordinary IVI_SOC_MODESET
+        // VehicleState enum. Submit it only after the OEM snapshot has been accepted, and keep it
+        // as the final energy-related command so the normal energy task cannot overwrite it.
+        int forcedEvOperation = -1;
+        if (forcedEv) {
+            final byte[][] forceFrames = getForcedEvCanCommand(true);
+            forcedEvOperation = plan.addOperationAfter(
+                    "forced EV restore (final CAN frame)",
+                    () -> sendLegacyFinalFrame(forceFrames, "forced EV restore")
+                            ? CanRestorePlan.OperationResult.CONFIRMED
+                            : CanRestorePlan.OperationResult.TRANSIENT_FAILURE,
+                    snapshotOperation, repeatOemOnNextPass);
+        }
+
+        // VSP is another documented direct frame. Sending it after every dependent restore pass
+        // avoids the OEM startup task restoring its default sound setting over our choice.
         final boolean pedestrianDisabled = disablePedestrianSound;
-        plan.addOperation(
+        final int pedestrianDependency = forcedEvOperation >= 0
+                ? forcedEvOperation : snapshotOperation;
+        final byte[][] pedestrianFrames = getPedestrianSoundCanCommand(pedestrianDisabled);
+        plan.addOperationAfter(
                 "pedestrian sound mode " + (pedestrianDisabled ? "off" : "on"),
-                () -> OemVehicleStateTransport.sendVehicleState(
-                        context,
-                        VehicleRestorePolicy.PEDESTRIAN_SOUND,
-                        VehicleRestorePolicy.PEDESTRIAN_SOUND_ID,
-                        VehicleRestorePolicy.pedestrianSoundState(pedestrianDisabled),
-                        "pedestrian sound restore").accepted()
-                        ? CanRestorePlan.OperationResult.ACCEPTED_UNCONFIRMED
+                () -> sendLegacyFinalFrame(pedestrianFrames, "pedestrian sound restore")
+                        ? CanRestorePlan.OperationResult.CONFIRMED
                         : CanRestorePlan.OperationResult.TRANSIENT_FAILURE,
+                pedestrianDependency,
                 repeatOemOnNextPass);
         return plan.build();
+    }
+
+    /**
+     * Reads back the states that can invalidate a wake restore. {@code null} means that the OEM
+     * service did not provide a trustworthy snapshot; callers must then keep the feedback gate
+     * closed instead of treating a startup ECO as a new saved preference.
+     */
+    static Boolean verifyOemRestore(Context context) {
+        if (context == null || CanSender.isDebugMode()) return Boolean.TRUE;
+
+        final Map<OemVehicleStateTransport.StateKey, Integer> expected = new LinkedHashMap<>();
+        if (driveEnabled) {
+            Map<OemVehicleStateTransport.StateKey, Integer> drive =
+                    DriveModeCanTransport.statesFor(context, driveMode);
+            if (drive == null) return null;
+            expected.putAll(drive);
+        }
+        // When forced EV is active the direct 0x68/0x54 frame intentionally puts IVI_SOC_MODESET
+        // into a state that TX57 does not expose as one of the ordinary 1..4 energy values.
+        if (energyEnabled && !forcedEv) {
+            int value;
+            try {
+                value = VehicleRestorePolicy.requireEnergy(energy);
+            } catch (IllegalArgumentException e) {
+                return null;
+            }
+            expected.put(new OemVehicleStateTransport.StateKey(
+                    VehicleRestorePolicy.SOC_MODE, VehicleRestorePolicy.SOC_MODE_ID), value);
+        }
+        if (recycleEnabled && VehicleRestorePolicy.allowsRecuperationRestore(driveMode)) {
+            try {
+                expected.put(new OemVehicleStateTransport.StateKey(
+                        VehicleRestorePolicy.REGEN_LEVEL, VehicleRestorePolicy.REGEN_LEVEL_ID),
+                        VehicleRestorePolicy.requireRecycle(recycle));
+            } catch (IllegalArgumentException e) {
+                return null;
+            }
+        }
+        // Forced EV and VSP are sent as direct frames and therefore are intentionally not checked
+        // through TX57: CanBusService's cached VehicleState would not include those raw writes.
+        if (expected.isEmpty()) return Boolean.TRUE;
+
+        Map<OemVehicleStateTransport.StateKey, Integer> actual =
+                OemVehicleStateTransport.readVehicleStates(context, expected.keySet());
+        if (actual == null) return null;
+        boolean matches = true;
+        for (Map.Entry<OemVehicleStateTransport.StateKey, Integer> entry : expected.entrySet()) {
+            Integer observed = actual.get(entry.getKey());
+            if (!entry.getValue().equals(observed)) {
+                matches = false;
+                Log.w("$$$ MainActivity restore verify $$$",
+                        "state mismatch " + entry.getKey() + " expected=" + entry.getValue()
+                                + " actual=" + observed);
+            }
+        }
+        if (matches) {
+            Log.i("$$$ MainActivity restore verify $$$",
+                    "OEM read-back matches saved restore snapshot");
+        }
+        return matches;
     }
 
     static CanRestorePlan createCanRestorePlan() {

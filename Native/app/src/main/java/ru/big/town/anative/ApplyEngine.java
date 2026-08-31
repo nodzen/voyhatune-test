@@ -55,6 +55,9 @@ public final class ApplyEngine {
     // 3 успешных прохода с паузой 5 с: отправили → 5 с → отправили → 5 с → отправили.
     private static final int  WAKE_REPEAT = 3;
     private static final long WAKE_PAUSE  = 5000;
+    // TX77/TX58 return before H97C finishes the CAN task. If read-back still disagrees, give the
+    // OEM queue a few additional ordered passes, but never spin forever on an unsupported state.
+    private static final int MAX_OEM_VERIFY_RETRIES = 3;
     // На пробуждении CAN-сервис/HAL поднимается не сразу — первые проходы падают (res=-1). Ждём готовности
     // CAN до этого дедлайна (первого успешного прохода), иначе фикс. окно заканчивалось ДО готовности CAN
     // и режим не применялся («нестабильно»).
@@ -232,7 +235,7 @@ public final class ApplyEngine {
                             wakeGeneration, restoreEpoch, triggerSequence);
                     if (coverage.kind == RestoreRunState.Coverage.SUCCESS) {
                         if (!MODE_SYNC_POLICY.completeRestore(
-                                gateGeneration, coverage.completedAt)) {
+                                gateGeneration, coverage.completedAt, coverage.verified)) {
                             Log.i(TAG, "covered cycle belongs to an older gate generation; gate stays closed");
                         }
                     } else if (coverage.kind == RestoreRunState.Coverage.FAILED) {
@@ -475,9 +478,10 @@ public final class ApplyEngine {
                     boolean restoreAccepted = result.completesRestore();
                     completionAccepted = RESTORE_RUN_STATE.completeCycle(
                             wakeGeneration, restoreEpoch,
-                            restoreAccepted, endedAt);
+                            restoreAccepted, result == CycleResult.SUCCESS, endedAt);
                     if (completionAccepted && restoreAccepted) {
-                        gateSettling = MODE_SYNC_POLICY.completeRestore(gateGeneration, endedAt);
+                        gateSettling = MODE_SYNC_POLICY.completeRestore(
+                                gateGeneration, endedAt, result == CycleResult.SUCCESS);
                     } else if (completionAccepted && result == CycleResult.FAILED) {
                         MODE_SYNC_POLICY.failRestore(gateGeneration);
                     }
@@ -488,8 +492,8 @@ public final class ApplyEngine {
                         + " cancelled/stale; coverage and gate unchanged");
             } else if (result == CycleResult.ACCEPTED_UNCONFIRMED && gateSettling) {
                 Log.w(TAG, "mode restore accepted by asynchronous OEM transport without CAN "
-                        + "completion proof; gate SETTLING gen=" + gateGeneration + " for "
-                        + ModeSyncPolicy.POST_RESTORE_SETTLE_MS + "ms");
+                        + "completion proof; read-back was unavailable, feedback persistence "
+                        + "remains blocked gen=" + gateGeneration);
             } else if (result == CycleResult.ACCEPTED_UNCONFIRMED) {
                 Log.w(TAG, "mode restore accepted-unconfirmed, but gate generation "
                         + gateGeneration + " was superseded");
@@ -569,7 +573,10 @@ public final class ApplyEngine {
         // three 5-second stabilization passes, each containing real OEM transactions.
         int requiredPasses = canPlan.hasRepeatableCommands() ? repeat : 1;
         int okPasses = 0, tries = 0;
+        int verificationRetries = 0;
         boolean acceptedUnconfirmed = false;
+        boolean restoreVerified = false;
+        boolean verificationFailed = false;
         long lastSuccessfulPassCoverage = -1L;
         long currentPassCoverage = -1L;
         while (true) {
@@ -618,7 +625,38 @@ public final class ApplyEngine {
                         + " не прошёл (успешных=" + okPasses
                         + ", осталось команд=" + canPlan.pendingCount() + ")");
             }
-            if (okPasses >= requiredPasses) break;                     // набрали нужное число успешных
+            if (okPasses >= requiredPasses) {
+                // Automatic wake restore is the only path which deliberately repeats OEM tasks.
+                // Once those tasks have had time to run, query the same VehicleState values back;
+                // Binder acceptance alone is not evidence that Comfort/EV/VSP reached the car.
+                if (!repeatOemOnNextPass) break;
+                Boolean verified = MainActivity.verifyOemRestore(ctx);
+                if (Boolean.TRUE.equals(verified)) {
+                    restoreVerified = true;
+                    break;
+                }
+                if (verified == null) {
+                    Log.w(TAG, "runCycle: OEM restore accepted but read-back unavailable; "
+                            + "feedback gate remains closed");
+                    break;
+                }
+                verificationRetries++;
+                if (verificationRetries > MAX_OEM_VERIFY_RETRIES) {
+                    verificationFailed = true;
+                    Log.e(TAG, "runCycle: OEM restore read-back still mismatches after "
+                            + MAX_OEM_VERIFY_RETRIES + " extra passes");
+                    break;
+                }
+                Log.w(TAG, "runCycle: OEM restore read-back mismatch; queueing ordered pass "
+                        + verificationRetries + "/" + MAX_OEM_VERIFY_RETRIES);
+                canPlan.resetForNextPass();
+                okPasses = 0;
+                currentPassCoverage = -1L;
+                if (!waitWhileCurrent(pause, wakeGeneration, restoreEpoch)) {
+                    return CycleResult.CANCELLED;
+                }
+                continue;
+            }
             if (SystemClock.elapsedRealtime() >= deadline) break;      // CAN так и не поднялся вовремя
             if (!waitWhileCurrent(pause, wakeGeneration, restoreEpoch)) {
                 return CycleResult.CANCELLED;
@@ -634,6 +672,8 @@ public final class ApplyEngine {
         } else {
             Log.i(TAG, "runCycle: режим применён, успешных проходов " + okPasses + "/" + requiredPasses + " (tries=" + tries + ")");
         }
+
+        if (verificationFailed) return CycleResult.FAILED;
 
         // Custom-команды могут разблокировать/разбудить узлы автомобиля. Не исполняем их, если
         // основной CAN restore не сделал ни одного успешного прохода или wake уже отменён сном.
@@ -691,6 +731,10 @@ public final class ApplyEngine {
         }
         Log.i(TAG, "runCycle: done (source=" + (status == 2 ? "provider" : "cache")
                 + (acceptedUnconfirmed ? ", OEM accepted-unconfirmed" : "") + ")");
+        if (restoreVerified) {
+            Log.i(TAG, "runCycle: OEM restore read-back verified");
+            return CycleResult.SUCCESS;
+        }
         return acceptedUnconfirmed ? CycleResult.ACCEPTED_UNCONFIRMED : CycleResult.SUCCESS;
     }
 
@@ -761,6 +805,7 @@ public final class ApplyEngine {
         private long lastSuccessfulCycleSequence = -1L;
         private long lastCycleCompletedAt = -1L;
         private long lastSuccessfulCycleCompletedAt = -1L;
+        private boolean lastSuccessfulCycleVerified;
         private long markedCanWakeGeneration = -1L;
         private long markedCanRestoreEpoch = -1L;
         private long markedCanCoverageThrough = -1L;
@@ -836,6 +881,7 @@ public final class ApplyEngine {
             lastSuccessfulCycleSequence = -1L;
             lastCycleCompletedAt = -1L;
             lastSuccessfulCycleCompletedAt = -1L;
+            lastSuccessfulCycleVerified = false;
             markedCanWakeGeneration = -1L;
             markedCanRestoreEpoch = -1L;
             markedCanCoverageThrough = -1L;
@@ -843,6 +889,11 @@ public final class ApplyEngine {
 
         synchronized boolean completeCycle(long wakeCandidate, long restoreCandidate,
                                            boolean successful, long endedAt) {
+            return completeCycle(wakeCandidate, restoreCandidate, successful, true, endedAt);
+        }
+
+        synchronized boolean completeCycle(long wakeCandidate, long restoreCandidate,
+                                           boolean successful, boolean verified, long endedAt) {
             if (!isRestoreCurrent(wakeCandidate, restoreCandidate)) return false;
             if (successful && (markedCanWakeGeneration != wakeCandidate
                     || markedCanRestoreEpoch != restoreCandidate)) {
@@ -854,6 +905,7 @@ public final class ApplyEngine {
             if (successful) {
                 lastSuccessfulCycleSequence = markedCanCoverageThrough;
                 lastSuccessfulCycleCompletedAt = endedAt;
+                lastSuccessfulCycleVerified = verified;
             }
             markedCanWakeGeneration = -1L;
             markedCanRestoreEpoch = -1L;
@@ -868,23 +920,26 @@ public final class ApplyEngine {
                 return Coverage.NONE_RESULT;
             }
             if (lastSuccessfulCycleSequence >= triggerSequence) {
-                return new Coverage(Coverage.SUCCESS, lastSuccessfulCycleCompletedAt);
+                return new Coverage(Coverage.SUCCESS, lastSuccessfulCycleCompletedAt,
+                        lastSuccessfulCycleVerified);
             }
-            return new Coverage(Coverage.FAILED, lastCycleCompletedAt);
+            return new Coverage(Coverage.FAILED, lastCycleCompletedAt, false);
         }
 
         static final class Coverage {
             static final int NONE = 0;
             static final int FAILED = 1;
             static final int SUCCESS = 2;
-            static final Coverage NONE_RESULT = new Coverage(NONE, -1L);
+            static final Coverage NONE_RESULT = new Coverage(NONE, -1L, false);
 
             final int kind;
             final long completedAt;
+            final boolean verified;
 
-            Coverage(int kind, long completedAt) {
+            Coverage(int kind, long completedAt, boolean verified) {
                 this.kind = kind;
                 this.completedAt = completedAt;
+                this.verified = verified;
             }
         }
     }
