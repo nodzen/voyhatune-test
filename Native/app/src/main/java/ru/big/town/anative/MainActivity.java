@@ -42,6 +42,8 @@ public class MainActivity extends AppCompatActivity {
     private static boolean apolloGreenSoundEnabled = false;
     private static boolean apolloTrafficSignsEnabled = false;
     private static boolean apolloStockUiEnabled = false;
+    private static boolean pauseMediaOnDoorClose = false;
+    private static boolean pauseMediaOnAnyDoor = false;
 
     //-------------- Вспомогательная шляпа не паримся ---------------------
     public static void printBytesArrayToLog(String TAG, byte[][] bytes) {
@@ -332,8 +334,13 @@ public class MainActivity extends AppCompatActivity {
                 if (cursor.getColumnCount() > 15) customCommandStarButton2 = cursor.getString(15);
                 // col 18 — «Пауза музыки при открытии двери водителя»: второй потребитель сигнала двери
                 boolean pauseMediaOnDoor = cursor.getColumnCount() > 18 && cursor.getInt(18) == 1;
-                applyModeSideEffects(context, debugMode, wiperColdMode, pauseMediaOnDoor);
-                saveModesCache(context, debugMode, wiperColdMode, pauseMediaOnDoor);
+                // cols 29,30 — возобновление после закрытия и пауза при открытии любой двери
+                pauseMediaOnDoorClose = cursor.getColumnCount() > 29 && cursor.getInt(29) == 1;
+                pauseMediaOnAnyDoor = cursor.getColumnCount() > 30 && cursor.getInt(30) == 1;
+                applyModeSideEffects(context, debugMode, wiperColdMode, pauseMediaOnDoor,
+                        pauseMediaOnDoorClose, pauseMediaOnAnyDoor);
+                saveModesCache(context, debugMode, wiperColdMode, pauseMediaOnDoor,
+                        pauseMediaOnDoorClose, pauseMediaOnAnyDoor);
                 ApplyEngine.noteLoadedModes(driveMode, energy, driveEnabled, energyEnabled);
                 Log.i(MODES_LOG, "FRESH: driveEnabled=" + driveEnabled
                         + " recycleEnabled=" + recycleEnabled + " energyEnabled=" + energyEnabled
@@ -345,7 +352,9 @@ public class MainActivity extends AppCompatActivity {
                         + "/" + apolloGreenSoundEnabled + "/" + apolloTrafficSignsEnabled
                         + " stockUi=" + apolloStockUiEnabled
                         + " debugMode=" + debugMode + " wiperColdMode=" + wiperColdMode
-                        + " pauseMediaOnDoor=" + pauseMediaOnDoor);
+                        + " pauseMediaOnDoor=" + pauseMediaOnDoor
+                        + " pauseMediaOnDoorClose=" + pauseMediaOnDoorClose
+                        + " pauseMediaOnAnyDoor=" + pauseMediaOnAnyDoor);
                 return 2;
             } else {
                 Log.w(MODES_LOG, "Content provider not ready or missing columns"
@@ -371,7 +380,9 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /** Сохраняет успешно прочитанный снимок настроек в NativePrefs (кэш на случай «глухого» пробуждения). */
-    private static void saveModesCache(Context context, boolean debugMode, boolean wiperColdMode, boolean pauseMediaOnDoor) {
+    private static void saveModesCache(Context context, boolean debugMode, boolean wiperColdMode,
+                                       boolean pauseMediaOnDoor, boolean pauseMediaOnDoorClose,
+                                       boolean pauseMediaOnAnyDoor) {
         nativePrefs(context).edit()
                 .putString("cacheDriveMode", driveMode)
                 .putString("cacheEnergy", energy)
@@ -395,6 +406,8 @@ public class MainActivity extends AppCompatActivity {
                 .putBoolean("cacheDebugMode", debugMode)
                 .putBoolean("cacheWiperColdMode", wiperColdMode)
                 .putBoolean("cachePauseMediaOnDoor", pauseMediaOnDoor)
+                .putBoolean("cachePauseMediaOnDoorClose", pauseMediaOnDoorClose)
+                .putBoolean("cachePauseMediaOnAnyDoor", pauseMediaOnAnyDoor)
                 .putBoolean("cacheValid", true)
                 .apply();
     }
@@ -432,7 +445,10 @@ public class MainActivity extends AppCompatActivity {
         boolean debugMode     = p.getBoolean("cacheDebugMode", false);
         boolean wiperColdMode = p.getBoolean("cacheWiperColdMode", false);
         boolean pauseMediaOnDoor = p.getBoolean("cachePauseMediaOnDoor", false);
-        applyModeSideEffects(context, debugMode, wiperColdMode, pauseMediaOnDoor);
+        pauseMediaOnDoorClose = p.getBoolean("cachePauseMediaOnDoorClose", false);
+        pauseMediaOnAnyDoor = p.getBoolean("cachePauseMediaOnAnyDoor", false);
+        applyModeSideEffects(context, debugMode, wiperColdMode, pauseMediaOnDoor,
+                pauseMediaOnDoorClose, pauseMediaOnAnyDoor);
         ApplyEngine.noteLoadedModes(driveMode, energy, driveEnabled, energyEnabled);
         Log.i(MODES_LOG, "CACHE: driveEnabled=" + driveEnabled
                 + " recycleEnabled=" + recycleEnabled + " energyEnabled=" + energyEnabled
@@ -444,14 +460,19 @@ public class MainActivity extends AppCompatActivity {
                 + "/" + apolloGreenSoundEnabled + "/" + apolloTrafficSignsEnabled
                 + " stockUi=" + apolloStockUiEnabled
                 + " debugMode=" + debugMode + " wiperColdMode=" + wiperColdMode
-                + " pauseMediaOnDoor=" + pauseMediaOnDoor);
+                + " pauseMediaOnDoor=" + pauseMediaOnDoor
+                + " pauseMediaOnDoorClose=" + pauseMediaOnDoorClose
+                + " pauseMediaOnAnyDoor=" + pauseMediaOnAnyDoor);
         return true;
     }
 
     /** Побочные эффекты настроек, не зависящие от отправки CAN: режим отладки и сервис-реактор двери водителя. */
-    private static void applyModeSideEffects(Context context, boolean debugMode, boolean wiperColdMode, boolean pauseMediaOnDoor) {
+    private static void applyModeSideEffects(Context context, boolean debugMode, boolean wiperColdMode,
+                                              boolean pauseMediaOnDoor, boolean pauseMediaOnDoorClose,
+                                              boolean pauseMediaOnAnyDoor) {
         CanSender.setDebugMode(debugMode);
-        applyDoorReactor(context, wiperColdMode, pauseMediaOnDoor);
+        applyDoorReactor(context, wiperColdMode, pauseMediaOnDoor, pauseMediaOnDoorClose,
+                pauseMediaOnAnyDoor);
     }
 
     // ------------------------------------------------------------------------
@@ -493,14 +514,20 @@ public class MainActivity extends AppCompatActivity {
      * сам сервис читает их и гейтит соответствующее действие; {@link SetModesService} по {@code wiperCold}
      * решает про power-on reset дворников. Сервис живёт, пока включён хотя бы один потребитель.
      */
-    public static void applyDoorReactor(Context context, boolean wiperEnabled, boolean pauseMediaOnDoor) {
+    public static void applyDoorReactor(Context context, boolean wiperEnabled, boolean pauseMediaOnDoor,
+                                        boolean pauseMediaOnDoorClose, boolean pauseMediaOnAnyDoor) {
         if (context == null) return;
-        Log.i("$$$ DoorReactor $$$", "applyDoorReactor: wiper=" + wiperEnabled + " pauseMedia=" + pauseMediaOnDoor);
+        Log.i("$$$ DoorReactor $$$", "applyDoorReactor: wiper=" + wiperEnabled
+                + " pauseMedia=" + pauseMediaOnDoor
+                + " resumeOnClose=" + pauseMediaOnDoorClose
+                + " anyDoor=" + pauseMediaOnAnyDoor);
         context.getSharedPreferences("NativePrefs", Context.MODE_PRIVATE)
                 .edit().putBoolean("wiperCold", wiperEnabled)
-                       .putBoolean("pauseMediaOnDoor", pauseMediaOnDoor).apply();
+                       .putBoolean("pauseMediaOnDoor", pauseMediaOnDoor)
+                       .putBoolean("pauseMediaOnDoorClose", pauseMediaOnDoorClose)
+                       .putBoolean("pauseMediaOnAnyDoor", pauseMediaOnAnyDoor).apply();
         Intent intent = new Intent(context, WiperColdService.class);
-        if (wiperEnabled || pauseMediaOnDoor) {
+        if (wiperEnabled || pauseMediaOnDoor || pauseMediaOnAnyDoor) {
             context.startForegroundService(intent);
         } else {
             // НЕ сбрасываем wiperServiceActive: если дворники по нашей оценке в сервисном

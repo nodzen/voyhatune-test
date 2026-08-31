@@ -471,9 +471,9 @@ final class CanBusEventHub {
         }
 
         if (!doorQueryHandler.post(() -> {
-            Integer frontLeft = readDriverDoor(binder);
+            DoorStatusSnapshot snapshot = readDoorStatus(binder);
             if (!ioHandler.post(() -> finishDriverDoorQuery(
-                    binder, epoch, revision, frontLeft))) {
+                    binder, epoch, revision, snapshot))) {
                 Log.w(TAG, "Door query completion rejected: hub IO stopped");
             }
         })) {
@@ -483,9 +483,9 @@ final class CanBusEventHub {
     }
 
     private void finishDriverDoorQuery(IBinder binder, long epoch, long revision,
-                                       Integer frontLeft) {
+                                       DoorStatusSnapshot snapshot) {
         try {
-            if (frontLeft == null) return;
+            if (snapshot == null) return;
             synchronized (eventLock) {
                 if (activeEpoch != epoch || readyEpoch != epoch || binder != remote
                         || revision != doorRevision) {
@@ -493,7 +493,8 @@ final class CanBusEventHub {
                 }
                 doorRevision++;
                 router.dispatch(CanBusEvent.door(CanBusEvent.Origin.SEED, epoch,
-                        ++nextSequence, SystemClock.elapsedRealtime(), frontLeft));
+                        ++nextSequence, SystemClock.elapsedRealtime(), snapshot.frontLeft,
+                        snapshot.frontRight, snapshot.rearLeft, snapshot.rearRight));
             }
         } finally {
             doorQueryGate.complete();
@@ -501,7 +502,7 @@ final class CanBusEventHub {
         }
     }
 
-    private Integer readDriverDoor(IBinder binder) {
+    private DoorStatusSnapshot readDoorStatus(IBinder binder) {
         Parcel data = Parcel.obtain();
         Parcel reply = Parcel.obtain();
         try {
@@ -510,7 +511,12 @@ final class CanBusEventHub {
             reply.readException();
             if (reply.readInt() == 0) return null;
             reply.readInt(); // bonnetDoor
-            return reply.readInt(); // fLDoor
+            int frontLeft = reply.readInt();
+            int frontRight = reply.readInt();
+            reply.readInt(); // loadSpace
+            int rearLeft = reply.readInt();
+            int rearRight = reply.readInt();
+            return new DoorStatusSnapshot(frontLeft, frontRight, rearLeft, rearRight);
         } catch (RemoteException | RuntimeException e) {
             Log.w(TAG, "getDoorStatus failed: " + e.getMessage());
             return null;
@@ -573,12 +579,28 @@ final class CanBusEventHub {
         startVehicleStateQueryIfNeeded();
     }
 
-    private void routeDoor(long epoch, int frontLeft) {
+    private void routeDoor(long epoch, int frontLeft, int frontRight,
+                           int rearLeft, int rearRight) {
         synchronized (eventLock) {
             if (epoch != activeEpoch) return;
             doorRevision++;
             routeLocked(CanBusEvent.door(CanBusEvent.Origin.LIVE, epoch,
-                    ++nextSequence, SystemClock.elapsedRealtime(), frontLeft));
+                    ++nextSequence, SystemClock.elapsedRealtime(), frontLeft,
+                    frontRight, rearLeft, rearRight));
+        }
+    }
+
+    private static final class DoorStatusSnapshot {
+        final int frontLeft;
+        final int frontRight;
+        final int rearLeft;
+        final int rearRight;
+
+        DoorStatusSnapshot(int frontLeft, int frontRight, int rearLeft, int rearRight) {
+            this.frontLeft = frontLeft;
+            this.frontRight = frontRight;
+            this.rearLeft = rearLeft;
+            this.rearRight = rearRight;
         }
     }
 
@@ -655,7 +677,12 @@ final class CanBusEventHub {
                         data.enforceInterface(CALLBACK_DESCRIPTOR);
                         if (data.readInt() == 0) return true;
                         data.readInt(); // bonnetDoor
-                        routeDoor(epoch, data.readInt()); // fLDoor
+                        int frontLeft = data.readInt();
+                        int frontRight = data.readInt();
+                        data.readInt(); // loadSpace
+                        int rearLeft = data.readInt();
+                        int rearRight = data.readInt();
+                        routeDoor(epoch, frontLeft, frontRight, rearLeft, rearRight);
                         return true;
                     }
                     case CB_AIR_CONDITION: {

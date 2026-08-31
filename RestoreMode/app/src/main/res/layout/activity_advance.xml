@@ -1523,6 +1523,94 @@
 
             </LinearLayout>
 
+            <!-- Возобновление музыки после закрытия двери -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="5dp"
+                android:layout_marginTop="10dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:background="@drawable/layout_category_bg"
+                android:paddingHorizontal="16dp"
+                android:paddingVertical="8dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Возобновлять музыку после закрытия двери"
+                        android:textColor="#FFFFFF"
+                        android:textSize="26px" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="Запускать обратно только музыку, которую приложение поставило на паузу при открытии."
+                        android:textColor="#888888"
+                        android:textSize="20px" />
+
+                </LinearLayout>
+
+                <Switch
+                    android:id="@+id/switchResumeMediaOnDoorClose"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:thumb="@drawable/switch_thumb"
+                    android:track="@drawable/switch_track" />
+
+            </LinearLayout>
+
+            <!-- Пауза при открытии любой двери -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="5dp"
+                android:layout_marginTop="10dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:background="@drawable/layout_category_bg"
+                android:paddingHorizontal="16dp"
+                android:paddingVertical="8dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Пауза при открытии любой двери"
+                        android:textColor="#FFFFFF"
+                        android:textSize="26px" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="Учитывать водительскую, переднюю пассажирскую и задние двери; при закрытии всех дверей можно возобновить музыку."
+                        android:textColor="#888888"
+                        android:textSize="20px" />
+
+                </LinearLayout>
+
+                <Switch
+                    android:id="@+id/switchPauseMediaOnAnyDoor"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:thumb="@drawable/switch_thumb"
+                    android:track="@drawable/switch_track" />
+
+            </LinearLayout>
+
         </LinearLayout>
     </ScrollView>
     <!-- конец pageDriveModes -->

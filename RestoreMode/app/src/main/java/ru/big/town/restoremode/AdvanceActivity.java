@@ -117,6 +117,10 @@ public class AdvanceActivity extends AppCompatActivity {
     private static final String NATIVE_PACKAGE = "ru.big.town.anative";
     private static final String ACTION_DOOR_MEDIA_PAUSE_CHANGED =
             "ru.big.town.anative.DOOR_MEDIA_PAUSE_CHANGED";
+    private static final String ACTION_DOOR_MEDIA_RESUME_CHANGED =
+            "ru.big.town.anative.DOOR_MEDIA_RESUME_CHANGED";
+    private static final String ACTION_DOOR_MEDIA_ANY_CHANGED =
+            "ru.big.town.anative.DOOR_MEDIA_ANY_CHANGED";
     private static final String NATIVE_CONFIG_PERMISSION =
             "ru.big.town.anative.permission.BIND_SET_MODES_SERVICE";
 
@@ -535,6 +539,30 @@ public class AdvanceActivity extends AppCompatActivity {
             switchPauseMedia.setOnCheckedChangeListener((b, checked) -> {
                 prefs.edit().putBoolean("pauseMediaOnDoor", checked).apply();
                 Intent changed = new Intent(ACTION_DOOR_MEDIA_PAUSE_CHANGED)
+                        .setClassName(NATIVE_PACKAGE, "ru.big.town.anative.SetModesConfigReceiver")
+                        .putExtra("enabled", checked);
+                sendBroadcast(changed, NATIVE_CONFIG_PERMISSION);
+            });
+        }
+
+        Switch switchResumeMedia = findViewById(R.id.switchResumeMediaOnDoorClose);
+        if (switchResumeMedia != null) {
+            switchResumeMedia.setChecked(prefs.getBoolean("pauseMediaOnDoorClose", false));
+            switchResumeMedia.setOnCheckedChangeListener((b, checked) -> {
+                prefs.edit().putBoolean("pauseMediaOnDoorClose", checked).apply();
+                Intent changed = new Intent(ACTION_DOOR_MEDIA_RESUME_CHANGED)
+                        .setClassName(NATIVE_PACKAGE, "ru.big.town.anative.SetModesConfigReceiver")
+                        .putExtra("enabled", checked);
+                sendBroadcast(changed, NATIVE_CONFIG_PERMISSION);
+            });
+        }
+
+        Switch switchAnyDoorMedia = findViewById(R.id.switchPauseMediaOnAnyDoor);
+        if (switchAnyDoorMedia != null) {
+            switchAnyDoorMedia.setChecked(prefs.getBoolean("pauseMediaOnAnyDoor", false));
+            switchAnyDoorMedia.setOnCheckedChangeListener((b, checked) -> {
+                prefs.edit().putBoolean("pauseMediaOnAnyDoor", checked).apply();
+                Intent changed = new Intent(ACTION_DOOR_MEDIA_ANY_CHANGED)
                         .setClassName(NATIVE_PACKAGE, "ru.big.town.anative.SetModesConfigReceiver")
                         .putExtra("enabled", checked);
                 sendBroadcast(changed, NATIVE_CONFIG_PERMISSION);

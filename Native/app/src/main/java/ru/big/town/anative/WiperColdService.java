@@ -76,6 +76,8 @@ public class WiperColdService extends Service {
     // ради любого из них, поэтому каждое действие гейтим своим флагом.
     private static final String PREF_WIPER_ENABLED  = "wiperCold";
     private static final String PREF_MEDIA_PAUSE    = "pauseMediaOnDoor";
+    private static final String PREF_MEDIA_RESUME   = "pauseMediaOnDoorClose";
+    private static final String PREF_MEDIA_ANY_DOOR = "pauseMediaOnAnyDoor";
 
     // Пауза музыки при открытии двери водителя. Команду отправляем сразу, fade идёт параллельно, а
     // нулевую громкость держим дольше типичного 1–1.5-секундного буфера wireless CarPlay/AndroidAuto.
@@ -84,6 +86,7 @@ public class WiperColdService extends Service {
     private static final long FADE_BACKPRESSURE_MS =
             (FADE_TOTAL_MS + FADE_STEPS - 1L) / FADE_STEPS;
     private static final long REMOTE_AUDIO_DRAIN_MS = 2_200L;
+    private static final long MEDIA_RESUME_RETRY_MS = 250L;
 
     // Native не может вызвать оригинальный Qinggan KeyManagerReader напрямую. В full-сборке это
     // действие принимает защищённый runtime-receiver в steeringwheelkeys.js; если инжект отсутствует
@@ -102,7 +105,7 @@ public class WiperColdService extends Service {
     // на этой голове: ACC/engine/vehicleKey/ignition-колбэки CanBus не шлёт вообще (проверено логами).
     private static final int    GEAR_MIN_MOVING  = 1;
 
-    // DoorStatus: флаг наличия, bonnet, затем водительская fLDoor.
+    // DoorStatus: флаг наличия, bonnet, fLDoor, fRDoor, loadSpace, rLDoor, rRDoor.
     private static final int DOOR_OPEN = 1;
     // Окно после power-on reset, в течение которого не поднимаем дворники заново: гасит
     // гонку «сбросили флаг → seed видит дверь всё ещё открытой → снова включает».
@@ -122,6 +125,13 @@ public class WiperColdService extends Service {
 
     // Последнее наблюдаемое состояние водительской двери: -1 неизвестно, 0 закрыта, 1 открыта
     private int  lastFLDoor = -1;
+    // Полный последний снимок дверей для медиареактора. Маска открытия и маска известных значений
+    // разделены: при неизвестной двери нельзя преждевременно возобновлять музыку.
+    private volatile int lastMediaDoorOpenMask = 0;
+    private volatile int lastMediaDoorKnownMask = 0;
+    private volatile boolean mediaPausedByDoor = false;
+    private volatile boolean mediaResumePending = false;
+    private volatile boolean mediaResumeRetryScheduled = false;
     private long lastPowerOnResetElapsed = 0L; // когда последний раз возвращали дворники по power on
 
     private void onCanBusEvent(CanBusEvent event) {
@@ -132,9 +142,9 @@ public class WiperColdService extends Service {
                 break;
             case DOOR:
                 if (event.origin == CanBusEvent.Origin.LIVE) {
-                    onDoorState(event.first);
+                    onDoorState(event.first, event.second, event.third, event.fourth);
                 } else {
-                    applyDoorSeed(event.first);
+                    applyDoorSeed(event.first, event.second, event.third, event.fourth);
                 }
                 break;
             case GEAR:
@@ -145,10 +155,15 @@ public class WiperColdService extends Service {
         }
     }
 
-    private void applyDoorSeed(int frontLeft) {
-        if (frontLeft < 0) return;
+    private void applyDoorSeed(int frontLeft, int frontRight, int rearLeft, int rearRight) {
+        if (frontLeft < 0 && frontRight < 0 && rearLeft < 0 && rearRight < 0) return;
         lastFLDoor = frontLeft;
-        Log.i(TAG, "seed: fLDoor=" + lastFLDoor + " active=" + isServiceActive());
+        lastMediaDoorOpenMask = DoorMediaPolicy.openMask(
+                frontLeft, frontRight, rearLeft, rearRight);
+        lastMediaDoorKnownMask = DoorMediaPolicy.knownMask(
+                frontLeft, frontRight, rearLeft, rearRight);
+        Log.i(TAG, "seed: doors=" + doorStateSummary(frontLeft, frontRight, rearLeft, rearRight)
+                + " active=" + isServiceActive());
         // A snapshot establishes the level but is not a real open edge: never pause media here.
         if (isWiperEnabled()) evaluate("seed");
     }
@@ -157,18 +172,38 @@ public class WiperColdService extends Service {
     // Логика
     // -------------------------------------------------------------------------
 
-    private void onDoorState(int fLDoor) {
-        if (fLDoor < 0 || fLDoor == lastFLDoor) return;
+    private void onDoorState(int fLDoor, int fRDoor, int rLDoor, int rRDoor) {
+        int previousOpenMask = lastMediaDoorOpenMask;
+        int previousKnownMask = lastMediaDoorKnownMask;
+        int currentOpenMask = DoorMediaPolicy.openMask(fLDoor, fRDoor, rLDoor, rRDoor);
+        int currentKnownMask = DoorMediaPolicy.knownMask(fLDoor, fRDoor, rLDoor, rRDoor);
+        boolean driverChanged = fLDoor >= 0 && fLDoor != lastFLDoor;
+        if (!driverChanged && currentOpenMask == previousOpenMask
+                && currentKnownMask == previousKnownMask) return;
         // Открытие двери = переход В открытое из ЛЮБОГО другого (закрыта/неизвестно). onDoorState
         // приходит только на РЕАЛЬНЫЕ дельта-события (seed выставляет lastFLDoor напрямую и зовёт
         // evaluate, сюда не заходит), так что паузу шлём на настоящее открытие, а не на пробуждении.
-        boolean openedNow = (fLDoor == DOOR_OPEN);
-        lastFLDoor = fLDoor;
-        boolean mediaOn = isMediaPauseEnabled();
-        Log.i(TAG, "door: fLDoor=" + fLDoor + " openedNow=" + openedNow + " mediaPause=" + mediaOn
+        boolean anyDoor = isMediaPauseOnAnyDoorEnabled();
+        boolean openedNow = DoorMediaPolicy.triggerOnOpen(
+                previousOpenMask, currentOpenMask, anyDoor);
+        boolean readyToResume = DoorMediaPolicy.readyToResume(
+                currentOpenMask, currentKnownMask, anyDoor);
+        lastMediaDoorOpenMask = currentOpenMask;
+        lastMediaDoorKnownMask = currentKnownMask;
+        if (driverChanged) lastFLDoor = fLDoor;
+        boolean mediaOn = isMediaPauseEnabled() || anyDoor;
+        Log.i(TAG, "door: " + doorStateSummary(fLDoor, fRDoor, rLDoor, rRDoor)
+                + " openedNow=" + openedNow + " anyDoor=" + anyDoor
+                + " readyToResume=" + readyToResume + " mediaPause=" + mediaOn
                 + " wiper=" + isWiperEnabled() + " active=" + isServiceActive());
-        if (openedNow && mediaOn) requestDoorMediaPause();
-        if (isWiperEnabled()) evaluate("door");
+        if (openedNow) {
+            // A new matching open cancels a resume queued while the door was briefly closed.
+            mediaResumePending = false;
+            if (mediaOn) requestDoorMediaPause();
+        } else if (readyToResume && isMediaResumeOnDoorCloseEnabled()) {
+            requestDoorMediaResume();
+        }
+        if (driverChanged && isWiperEnabled()) evaluate("door");
     }
 
     /**
@@ -288,6 +323,24 @@ public class WiperColdService extends Service {
         return getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_MEDIA_PAUSE, false);
     }
 
+    /** Включено ли возобновление после закрытия двери. */
+    private boolean isMediaResumeOnDoorCloseEnabled() {
+        return getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getBoolean(PREF_MEDIA_RESUME, false);
+    }
+
+    /** Включена ли пауза при открытии любой из четырёх дверей. */
+    private boolean isMediaPauseOnAnyDoorEnabled() {
+        return getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getBoolean(PREF_MEDIA_ANY_DOOR, false);
+    }
+
+    private static String doorStateSummary(int frontLeft, int frontRight,
+                                           int rearLeft, int rearRight) {
+        return "fLDoor=" + frontLeft + ",fRDoor=" + frontRight
+                + ",rLDoor=" + rearLeft + ",rRDoor=" + rearRight;
+    }
+
     // -------------------------------------------------------------------------
     // Пауза музыки при открытии двери водителя (с плавным затуханием громкости)
     // -------------------------------------------------------------------------
@@ -298,6 +351,10 @@ public class WiperColdService extends Service {
      * не откладывает саму команду паузы. За один door-open команда отправляется ровно один раз.
      */
     private void requestDoorMediaPause() {
+        if (mediaPausedByDoor) {
+            Log.i(TAG, "pauseActiveMediaWithFade: already paused by door, duplicate suppressed");
+            return;
+        }
         int workGeneration = mediaPauseWorkGate.tryAcquire();
         if (workGeneration == DoorPauseWorkGate.REJECTED_GENERATION) {
             Log.i(TAG, "pauseActiveMediaWithFade: duplicate suppressed");
@@ -316,6 +373,8 @@ public class WiperColdService extends Service {
             runMediaPauseAndFade(workGeneration);
         } catch (Throwable error) {
             Log.w(TAG, "pauseActiveMediaWithFade: " + error.getMessage());
+            mediaPausedByDoor = false;
+            mediaResumePending = false;
             cancelMediaFadeAndRestoreVolume();
             mediaPauseWorkGate.release(workGeneration);
         }
@@ -354,7 +413,7 @@ public class WiperColdService extends Service {
 
         // Главное исправление AutoKit: команда уходит в t=0 по тому же keymanager-пути, по которому
         // работает физическая кнопка, а не после fade через глобальный PAUSE=127.
-        dispatchDoorPause(am, workGeneration);
+        mediaPausedByDoor = dispatchDoorPause(am, workGeneration);
         if (destroyed || !mediaPauseWorkGate.isLatest(workGeneration)) {
             finishMediaFade(generation, workGeneration, true);
             return;
@@ -443,10 +502,105 @@ public class WiperColdService extends Service {
         }
         mediaFadeAudioManager = null;
         mediaPauseWorkGate.release(workGeneration);
+        if (!destroyed && mediaResumePending) {
+            mediaResumePending = false;
+            if (mediaPausedByDoor && isDoorResumeConditionSatisfied()) {
+                requestDoorMediaResume();
+            }
+        }
+    }
+
+    private boolean isDoorResumeConditionSatisfied() {
+        return DoorMediaPolicy.readyToResume(
+                lastMediaDoorOpenMask, lastMediaDoorKnownMask,
+                isMediaPauseOnAnyDoorEnabled());
+    }
+
+    /** Queues one resume after the pause/drain run; a close during the fade is not lost. */
+    private void requestDoorMediaResume() {
+        if (!isMediaResumeOnDoorCloseEnabled()) return;
+        if (!isDoorResumeConditionSatisfied()) {
+            mediaResumePending = false;
+            return;
+        }
+        if (!mediaPausedByDoor) {
+            // The pause worker may not have recorded its result yet. The finishing callback will
+            // retry only if this run really paused active media.
+            mediaResumePending = mediaPauseWorkGate.isBusy() || mediaPauseState.isBusy();
+            if (mediaResumePending) scheduleDoorMediaResumeRetry();
+            return;
+        }
+        int workGeneration = mediaPauseWorkGate.tryAcquire();
+        if (workGeneration == DoorPauseWorkGate.REJECTED_GENERATION) {
+            mediaResumePending = true;
+            scheduleDoorMediaResumeRetry();
+            return;
+        }
+        mediaResumePending = false;
+        Handler worker = mediaHandler;
+        if (destroyed || worker == null
+                || !worker.post(() -> resumeDoorMediaOnWorker(workGeneration))) {
+            mediaPauseWorkGate.release(workGeneration);
+        }
+    }
+
+    private void scheduleDoorMediaResumeRetry() {
+        if (mediaResumeRetryScheduled || destroyed) return;
+        Handler worker = mediaHandler;
+        if (worker == null) return;
+        mediaResumeRetryScheduled = true;
+        if (!worker.postDelayed(() -> {
+            mediaResumeRetryScheduled = false;
+            if (!destroyed && mediaResumePending) requestDoorMediaResume();
+        }, MEDIA_RESUME_RETRY_MS)) {
+            mediaResumeRetryScheduled = false;
+        }
+    }
+
+    private void resumeDoorMediaOnWorker(int workGeneration) {
+        try {
+            if (destroyed || !mediaPauseWorkGate.isLatest(workGeneration)
+                    || !mediaPausedByDoor || !isMediaResumeOnDoorCloseEnabled()
+                    || !isDoorResumeConditionSatisfied()) {
+                mediaPauseWorkGate.release(workGeneration);
+                return;
+            }
+
+            AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
+            boolean musicActive = false;
+            try {
+                musicActive = am != null && am.isMusicActive();
+            } catch (Exception e) {
+                Log.w(TAG, "resumeDoorMedia: isMusicActive: " + e.getMessage());
+            }
+            if (musicActive) {
+                // A user or another component may have started playback while the door was open.
+                // PLAY_PAUSE would stop it, so consider the door pause already resolved.
+                Log.i(TAG, "resumeDoorMedia: music already active, toggle suppressed");
+                mediaPausedByDoor = false;
+                mediaPauseWorkGate.release(workGeneration);
+                return;
+            }
+
+            MediaControlRouter.Result result = MediaControlRouter.dispatch(
+                    this, MediaControlPolicy.Command.PLAY_PAUSE);
+            Log.i(TAG, "resumeDoorMedia: route=" + result.route + " key=" + result.keyCode
+                    + " pkg=" + result.packageName + " stateClass=" + result.playbackClass);
+            if (MediaControlRouter.ROUTE_KEYMANAGER.equals(result.route)) {
+                sendMediaProxy(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, false, am, workGeneration);
+            } else if (MediaControlRouter.ROUTE_NATIVE.equals(result.route)) {
+                sendMediaProxy(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, true, am, workGeneration);
+            }
+            mediaPausedByDoor = false;
+            mediaPauseWorkGate.release(workGeneration);
+        } catch (Throwable error) {
+            Log.w(TAG, "resumeDoorMedia: " + error.getMessage());
+            mediaPauseWorkGate.release(workGeneration);
+        }
     }
 
     /** Выбирает ровно одну семантическую команду; direct/noop уже полностью обработаны роутером. */
-    private void dispatchDoorPause(AudioManager am, int workGeneration) {
+    private boolean dispatchDoorPause(AudioManager am, int workGeneration) {
         MediaControlRouter.Result result = MediaControlRouter.dispatch(
                 this, MediaControlPolicy.Command.PAUSE_ONLY);
         Log.i(TAG, "dispatchDoorPause: route=" + result.route + " key=" + result.keyCode
@@ -454,7 +608,8 @@ public class WiperColdService extends Service {
 
         if (MediaControlRouter.ROUTE_DIRECT.equals(result.route)
                 || MediaControlRouter.ROUTE_NOOP.equals(result.route)) {
-            return;
+            return MediaControlRouter.ROUTE_DIRECT.equals(result.route)
+                    && result.playbackClass == MediaControlPolicy.STATE_ACTIVE;
         }
 
         boolean musicActive = false;
@@ -473,13 +628,15 @@ public class WiperColdService extends Service {
                 Log.i(TAG, "dispatchDoorPause: no Android session, using original Qinggan PLAY_PAUSE path");
             }
             sendMediaProxy(keyCode, nativeQinggan, am, workGeneration);
-            return;
+            return result.playbackClass == MediaControlPolicy.STATE_ACTIVE || musicActive;
         }
         if (MediaControlRouter.ROUTE_NATIVE.equals(result.route)) {
             // NATIVE_QG is returned for a confirmed active OEM/Bluetooth target. Recreate QG6 in
             // keymanager; the completion fallback uses standard 85 if the hook is unavailable.
             sendMediaProxy(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, true, am, workGeneration);
+            return result.playbackClass == MediaControlPolicy.STATE_ACTIVE || musicActive;
         }
+        return false;
     }
 
     private void sendMediaProxy(int keyCode, boolean nativeQinggan,
