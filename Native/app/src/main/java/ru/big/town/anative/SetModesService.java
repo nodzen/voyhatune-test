@@ -667,6 +667,7 @@ public class SetModesService extends Service {
     private volatile Handler carPowerHandler;
     private HandlerThread carPowerThread;
     private final CarPowerCallbackGate carPowerCallbackGate = new CarPowerCallbackGate();
+    private CarSignalPowerBridge carSignalPowerBridge;
     private WashModeController washModeController;
     private PowerHoldController powerHoldController;
     private PowerHoldStatusTracker powerHoldStatusTracker;
@@ -678,6 +679,9 @@ public class SetModesService extends Service {
     private volatile boolean serviceDestroyed = false;
     private boolean screenOffObserved = false;
     private boolean pendingPhysicalWake = false;
+    // CarSignalService may repeat the same level while MCU/Android are waking. Keep only real
+    // edges so an identical ACC_ON cannot restart the full restore after the debounce window.
+    private int lastOemPowerState = Integer.MIN_VALUE;
 
     private final Runnable startNowPlayingRunnable = () -> {
         try {
@@ -838,6 +842,9 @@ public class SetModesService extends Service {
         setModesReceiverDynamic = new SetModesReceiverDynamic(
                 this::handleScreenOffFallback,
                 this::handleScreenOnFallback);
+        carSignalPowerBridge = new CarSignalPowerBridge(
+                this, mainHandler, this::handleOemPowerStateChanged);
+        carSignalPowerBridge.start();
         if (BuildConfig.IS_FULL) {
             screenLiftTaskRestorer = new ScreenLiftTaskRestorer(getApplicationContext());
             screenLiftTaskRestorer.register();
@@ -884,6 +891,38 @@ public class SetModesService extends Service {
             ApplyEngine.resetRestoreGate("power state " + powerStateName(state));
         }
         Log.i(TAG, "onStateChanged() ignored state: " + state);
+    }
+
+    /**
+     * На этой Voyah-прошивке физический ACC/MCU цикл не приходит в android.car: штатный стек
+     * получает его напрямую от CarSignalService. Его powerState=1 — выключение, powerState=0 —
+     * включение. Пропускаем эти границы через тот же gate, что и штатный CarPower callback,
+     * чтобы CanBusService не записывал заводской режим как пользовательский.
+     */
+    private void handleOemPowerStateChanged(int state) {
+        if (serviceDestroyed) return;
+        if (state != 0 && state != 1) {
+            Log.i(TAG, "OEM CarSignal power state ignored: " + state);
+            return;
+        }
+        if (state == lastOemPowerState) return;
+        lastOemPowerState = state;
+        Log.i(TAG, "OEM CarSignal power state changed: " + state
+                + (state == 1 ? " (ACC_OFF)" : " (ACC_ON)"));
+        if (state == 1) {
+            screenOffObserved = true;
+            pendingPhysicalWake = false;
+            endWakeSession();
+            cancelAncillaryWakeTasks();
+            requestWashModeCleanup("OEM CarSignal ACC_OFF");
+            ApplyEngine.resetRestoreGate("OEM CarSignal ACC_OFF");
+            return;
+        }
+        requestWashModeCleanup("OEM CarSignal ACC_ON");
+        ApplyEngine.scheduleApply("OEM CarSignal ACC_ON");
+        screenOffObserved = false;
+        pendingPhysicalWake = false;
+        runWakeSideEffects("OEM CarSignal ACC_ON");
     }
 
     /** Состояния питания, трактуемые как «пробуждение → нужно применить настройки». */
@@ -1240,6 +1279,9 @@ public class SetModesService extends Service {
     public void onDestroy() {
         Log.i(TAG, "onDestroy()");
         serviceDestroyed = true;
+        CarSignalPowerBridge powerBridge = carSignalPowerBridge;
+        carSignalPowerBridge = null;
+        if (powerBridge != null) powerBridge.stop();
         if (powerHoldStatusReceiverRegistered) {
             try {
                 unregisterReceiver(powerHoldStatusRequestReceiver);
