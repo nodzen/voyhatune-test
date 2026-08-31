@@ -26,9 +26,11 @@ final class CanBusEvent {
     final int first;
     final int second;
     final int third;
+    /** Fourth payload value; for DOOR this is the rear-right door state. */
+    final int fourth;
 
     private CanBusEvent(Kind kind, Origin origin, long connectionEpoch, long sequence,
-                        long elapsedRealtime, int first, int second, int third) {
+                        long elapsedRealtime, int first, int second, int third, int fourth) {
         this.kind = kind;
         this.origin = origin;
         this.connectionEpoch = connectionEpoch;
@@ -37,45 +39,51 @@ final class CanBusEvent {
         this.first = first;
         this.second = second;
         this.third = third;
+        this.fourth = fourth;
     }
 
     static CanBusEvent connection(long epoch, long sequence, long elapsed) {
         return new CanBusEvent(Kind.CONNECTION, Origin.LIVE, epoch, sequence,
-                elapsed, 0, 0, 0);
+                elapsed, 0, 0, 0, 0);
     }
 
     static CanBusEvent connectionLost(long barrierEpoch, long sequence, long elapsed,
                                       long closedEpoch) {
         return new CanBusEvent(Kind.CONNECTION_LOST, Origin.LIVE, barrierEpoch, sequence,
-                elapsed, (int) Math.min(Integer.MAX_VALUE, closedEpoch), 0, 0);
+                elapsed, (int) Math.min(Integer.MAX_VALUE, closedEpoch), 0, 0, 0);
     }
 
     static CanBusEvent door(Origin origin, long epoch, long sequence, long elapsed, int frontLeft) {
+        return door(origin, epoch, sequence, elapsed, frontLeft, -1, -1, -1);
+    }
+
+    static CanBusEvent door(Origin origin, long epoch, long sequence, long elapsed,
+                            int frontLeft, int frontRight, int rearLeft, int rearRight) {
         return new CanBusEvent(Kind.DOOR, origin, epoch, sequence,
-                elapsed, frontLeft, 0, 0);
+                elapsed, frontLeft, frontRight, rearLeft, rearRight);
     }
 
     static CanBusEvent gear(Origin origin, long epoch, long sequence, long elapsed, int value) {
         return new CanBusEvent(Kind.GEAR, origin, epoch, sequence,
-                elapsed, value, 0, 0);
+                elapsed, value, 0, 0, 0);
     }
 
     static CanBusEvent light(Origin origin, long epoch, long sequence, long elapsed,
                              int autoLamp, int dippedBeam, int headLight) {
         return new CanBusEvent(Kind.LIGHT_STATUS, origin, epoch, sequence,
-                elapsed, autoLamp, dippedBeam, headLight);
+                elapsed, autoLamp, dippedBeam, headLight, 0);
     }
 
     static CanBusEvent vehicleState(Origin origin, long epoch, long sequence, long elapsed,
                                     int stableId, int value) {
         return new CanBusEvent(Kind.VEHICLE_STATE, origin, epoch, sequence,
-                elapsed, stableId, value, 0);
+                elapsed, stableId, value, 0, 0);
     }
 
     static CanBusEvent ambientTemperature(Origin origin, long epoch, long sequence,
                                           long elapsed, int value) {
         return new CanBusEvent(Kind.AMBIENT_TEMPERATURE, origin, epoch, sequence,
-                elapsed, value, 0, 0);
+                elapsed, value, 0, 0, 0);
     }
 
     int signalKey() {
@@ -91,6 +99,6 @@ final class CanBusEvent {
     boolean samePayload(CanBusEvent other) {
         return other != null && kind == other.kind && origin == other.origin
                 && connectionEpoch == other.connectionEpoch && first == other.first
-                && second == other.second && third == other.third;
+                && second == other.second && third == other.third && fourth == other.fourth;
     }
 }

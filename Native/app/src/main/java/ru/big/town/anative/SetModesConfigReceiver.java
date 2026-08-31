@@ -17,13 +17,28 @@ public class SetModesConfigReceiver extends BroadcastReceiver {
     private static final String TAG = "$$$ SetModesConfig $$$";
     public static final String ACTION_DOOR_MEDIA_PAUSE_CHANGED =
             "ru.big.town.anative.DOOR_MEDIA_PAUSE_CHANGED";
+    public static final String ACTION_DOOR_MEDIA_RESUME_CHANGED =
+            "ru.big.town.anative.DOOR_MEDIA_RESUME_CHANGED";
+    public static final String ACTION_DOOR_MEDIA_ANY_CHANGED =
+            "ru.big.town.anative.DOOR_MEDIA_ANY_CHANGED";
 
     @Override
     public void onReceive(Context context, Intent intent) {
         if (intent == null) return;
         String action = intent.getAction();
         if (ACTION_DOOR_MEDIA_PAUSE_CHANGED.equals(action)) {
-            applyDoorMediaPause(context, intent.getBooleanExtra("enabled", false));
+            applyDoorMediaSetting(context, "pauseMediaOnDoor",
+                    intent.getBooleanExtra("enabled", false));
+            return;
+        }
+        if (ACTION_DOOR_MEDIA_RESUME_CHANGED.equals(action)) {
+            applyDoorMediaSetting(context, "pauseMediaOnDoorClose",
+                    intent.getBooleanExtra("enabled", false));
+            return;
+        }
+        if (ACTION_DOOR_MEDIA_ANY_CHANGED.equals(action)) {
+            applyDoorMediaSetting(context, "pauseMediaOnAnyDoor",
+                    intent.getBooleanExtra("enabled", false));
             return;
         }
         if (!BuildConfig.IS_FULL) return;
@@ -62,20 +77,23 @@ public class SetModesConfigReceiver extends BroadcastReceiver {
         }
     }
 
-    /** Applies the door-media switch immediately; the next settings query remains the source-of-truth refresh. */
-    private static void applyDoorMediaPause(Context context, boolean enabled) {
+    /** Applies one door-media setting immediately; the next settings query remains the source-of-truth refresh. */
+    private static void applyDoorMediaSetting(Context context, String key, boolean enabled) {
         if (context == null) return;
-        context.getSharedPreferences("NativePrefs", Context.MODE_PRIVATE)
-                .edit().putBoolean("pauseMediaOnDoor", enabled).apply();
-        boolean wiperEnabled = context.getSharedPreferences("NativePrefs", Context.MODE_PRIVATE)
-                .getBoolean("wiperCold", false);
+        android.content.SharedPreferences prefs = context.getSharedPreferences(
+                "NativePrefs", Context.MODE_PRIVATE);
+        prefs.edit().putBoolean(key, enabled).apply();
+        boolean wiperEnabled = prefs.getBoolean("wiperCold", false);
+        boolean pauseMedia = prefs.getBoolean("pauseMediaOnDoor", false);
+        boolean pauseAnyDoor = prefs.getBoolean("pauseMediaOnAnyDoor", false);
         Intent service = new Intent(context, WiperColdService.class);
-        if (enabled || wiperEnabled) {
+        if (pauseMedia || pauseAnyDoor || wiperEnabled) {
             context.startForegroundService(service);
         } else {
             context.stopService(service);
         }
-        Log.i(TAG, "DOOR_MEDIA_PAUSE_CHANGED=" + enabled + "; service consumer wiper=" + wiperEnabled);
+        Log.i(TAG, key + "=" + enabled + "; service consumer wiper=" + wiperEnabled
+                + " pause=" + pauseMedia + " anyDoor=" + pauseAnyDoor);
     }
 
     private static void applyKeyboardMode(Context context, String requestedMode) {

@@ -33,6 +33,8 @@ public class RestoreModeContentProvider extends ContentProvider {
     private  boolean autoLaunchOnWake=false;
     private  boolean batteryHeatAuto=false;
     private  boolean pauseMediaOnDoor=false;
+    private  boolean pauseMediaOnDoorClose=false;
+    private  boolean pauseMediaOnAnyDoor=false;
     private  boolean fragranceEnabled=FragranceSettings.DEFAULT_ENABLED;
     private  int fragranceTaste=FragranceSettings.DEFAULT_TASTE;
     private  int fragranceDuration=FragranceSettings.DEFAULT_DURATION;
@@ -120,6 +122,8 @@ public class RestoreModeContentProvider extends ContentProvider {
         autoLaunchOnWake        = sharedPreferences.getBoolean("autoLaunchOnWake",         false);
         batteryHeatAuto         = sharedPreferences.getBoolean("batteryHeatAuto",          false);
         pauseMediaOnDoor        = sharedPreferences.getBoolean("pauseMediaOnDoor",         false);
+        pauseMediaOnDoorClose   = sharedPreferences.getBoolean("pauseMediaOnDoorClose",    false);
+        pauseMediaOnAnyDoor     = sharedPreferences.getBoolean("pauseMediaOnAnyDoor",      false);
         fragranceEnabled        = sharedPreferences.getBoolean(
                 FragranceSettings.ENABLED, FragranceSettings.DEFAULT_ENABLED);
         fragranceTaste          = FragranceSettings.normalizeTaste(sharedPreferences.getInt(
@@ -169,6 +173,8 @@ public class RestoreModeContentProvider extends ContentProvider {
                 ApolloSettings.GREEN_SOUND, // 26 — звук зелёного сигнала
                 ApolloSettings.TRAFFIC_SIGNS,// 27 — распознавание дорожных знаков
                 ApolloSettings.STOCK_UI,      // 28 — эмуляция подписки/экзамена для штатного UI
+                "pauseMediaOnDoorClose",     // 29 — возобновление музыки после закрытия двери
+                "pauseMediaOnAnyDoor",       // 30 — пауза при открытии любой двери
         });
 
         cursor.addRow(new Object[]{
@@ -197,6 +203,8 @@ public class RestoreModeContentProvider extends ContentProvider {
                 apolloGreenSoundEnabled ? 1 : 0,
                 apolloTrafficSignsEnabled ? 1 : 0,
                 apolloStockUiEnabled ? 1 : 0,
+                pauseMediaOnDoorClose ? 1 : 0,
+                pauseMediaOnAnyDoor ? 1 : 0,
         });
        return cursor;
 
