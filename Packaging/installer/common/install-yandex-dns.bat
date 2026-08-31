@@ -2,8 +2,14 @@
 setlocal EnableExtensions DisableDelayedExpansion
 cd /d "%~dp0" || exit /b 1
 
+rem configure is used by the main installer: it prompts only when the managed overlay is off
+rem and deliberately does not reboot. With no argument this remains the standalone installer.
+set "YDNS_MODE=%~1"
+if /i "%YDNS_MODE%"=="configure" goto :configure
+
 set "YDNS_HELPER=%~dp0dns-overlay.bat"
 set "YDNS_STATUS_FILE=%TEMP%\open_voyah_ydns_%RANDOM%_%RANDOM%.tmp"
+set "YDNS_REBOOT=1"
 
 if not exist "%YDNS_HELPER%" (
     echo !!! Missing dns-overlay.bat. The device was not changed.
@@ -43,6 +49,10 @@ if errorlevel 1 (
     echo !!! Yandex DNS installation failed. Fix the error and run this file again.
     exit /b 1
 )
+if "%YDNS_REBOOT%"=="0" (
+    echo Yandex DNS installation complete. The main installer will reboot the device.
+    exit /b 0
+)
 adb.exe reboot
 if errorlevel 1 (
     echo !!! Yandex DNS was installed, but ADB could not reboot the device. Reboot it manually.
@@ -69,6 +79,75 @@ echo !!! Could not determine the current DNS overlay state. The device was not c
 exit /b 1
 
 :adb_failed
+del "%YDNS_STATUS_FILE%" >nul 2>nul
+echo !!! ADB could not connect to the device with root access.
+exit /b 1
+
+:configure
+set "YDNS_REBOOT=0"
+set "YDNS_HELPER=%~dp0dns-overlay.bat"
+set "YDNS_STATUS_FILE=%TEMP%\open_voyah_ydns_%RANDOM%_%RANDOM%.tmp"
+
+if not exist "%YDNS_HELPER%" (
+    echo !!! Missing dns-overlay.bat. The device was not changed.
+    exit /b 1
+)
+
+call "%YDNS_HELPER%" prepare-install
+if errorlevel 1 (
+    echo !!! The Yandex DNS installer package is incomplete. The device was not changed.
+    exit /b 1
+)
+
+adb.exe root >nul 2>nul
+if errorlevel 1 goto :configure_adb_failed
+adb.exe wait-for-device
+if errorlevel 1 goto :configure_adb_failed
+adb.exe root >nul 2>nul
+if errorlevel 1 goto :configure_adb_failed
+
+call "%YDNS_HELPER%" status > "%YDNS_STATUS_FILE%"
+if errorlevel 1 goto :configure_status_failed
+
+findstr.exe /i /x /c:"on" "%YDNS_STATUS_FILE%" >nul
+if not errorlevel 1 goto :configure_already_on
+findstr.exe /i /x /c:"external" "%YDNS_STATUS_FILE%" >nul
+if not errorlevel 1 goto :configure_unchanged
+findstr.exe /i /x /c:"broken" "%YDNS_STATUS_FILE%" >nul
+if not errorlevel 1 goto :configure_unchanged
+findstr.exe /i /x /c:"off" "%YDNS_STATUS_FILE%" >nul
+if errorlevel 1 goto :configure_status_failed
+
+del "%YDNS_STATUS_FILE%" >nul 2>nul
+echo.
+echo === Optional component ===
+echo Yandex DNS overlay: enables the T-Box whitelist DNS configuration.
+choice /C YN /N /M "Install Yandex DNS now? [Y/N]: "
+if errorlevel 2 goto :configure_skip
+if errorlevel 1 goto :install
+goto :configure_status_failed
+
+:configure_already_on
+del "%YDNS_STATUS_FILE%" >nul 2>nul
+echo Yandex DNS overlay is already enabled. Leaving it unchanged.
+exit /b 0
+
+:configure_unchanged
+del "%YDNS_STATUS_FILE%" >nul 2>nul
+echo Yandex DNS overlay is external or inconsistent. Leaving it unchanged.
+exit /b 0
+
+:configure_skip
+del "%YDNS_STATUS_FILE%" >nul 2>nul
+echo Yandex DNS skipped. The existing DNS state was left unchanged.
+exit /b 0
+
+:configure_status_failed
+del "%YDNS_STATUS_FILE%" >nul 2>nul
+echo !!! Could not determine the current DNS overlay state. The device was not changed.
+exit /b 1
+
+:configure_adb_failed
 del "%YDNS_STATUS_FILE%" >nul 2>nul
 echo !!! ADB could not connect to the device with root access.
 exit /b 1

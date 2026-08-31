@@ -6,12 +6,12 @@ plugins {
 
 android {
     namespace = "ru.big.town.restoremode"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "ru.big.town.restoremode"
         minSdk = 30
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0"
 
@@ -74,7 +74,7 @@ android {
         includeInApk = true
         includeInBundle = true
     }
-    ndkVersion = "27.0.12077973"
+    ndkVersion = "29.0.14206865"
 
 }
 
