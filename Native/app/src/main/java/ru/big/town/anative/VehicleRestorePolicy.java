@@ -12,7 +12,6 @@ final class VehicleRestorePolicy {
     static final int SOC_EV = 2;
     static final int SOC_REV = 3;
     static final int SOC_SREV = 4;
-    static final int SOC_FORCE_EV = 5;
 
     static final String REGEN_LEVEL = "HUM_ENERGY_PTREGEN_LEVL";
     static final int REGEN_LEVEL_ID = 619;
@@ -33,12 +32,9 @@ final class VehicleRestorePolicy {
      * deliberately absent and will be filled by the Android 11 OEM CanBusService from its cache.
      */
     static void appendPrimaryTo(Map<String, Integer> target,
-                                boolean energyEnabled, String energy,
-                                boolean forcedEv) {
+                                boolean energyEnabled, String energy) {
         if (target == null) throw new IllegalArgumentException("Target bundle is null");
         if (energyEnabled) target.put(SOC_MODE, requireEnergy(energy));
-        // Forced EV intentionally wins over the ordinary energy selection in the same OEM bundle.
-        if (forcedEv) target.put(SOC_MODE, SOC_FORCE_EV);
     }
 
     /**
@@ -60,7 +56,7 @@ final class VehicleRestorePolicy {
         return !"SNOW".equals(driveMode);
     }
 
-    /** H97C handles this state through TX58; TX77 would only fall back to the same setter. */
+    /** Numeric mapping retained for diagnostics; restore uses the documented direct VSP frame. */
     static int pedestrianSoundState(boolean disabled) {
         return disabled ? PEDESTRIAN_SOUND_DISABLED : PEDESTRIAN_SOUND_ENABLED;
     }
