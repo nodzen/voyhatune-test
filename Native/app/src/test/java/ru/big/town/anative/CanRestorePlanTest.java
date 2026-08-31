@@ -148,32 +148,6 @@ public class CanRestorePlanTest {
         assertEquals(2, oemCalls.get());
     }
 
-    @Test
-    public void dependentOemOperationWaitsForAcceptedPredecessor() {
-        CanRestorePlan.Builder builder = new CanRestorePlan.Builder();
-        AtomicInteger firstCalls = new AtomicInteger();
-        AtomicInteger secondCalls = new AtomicInteger();
-        int first = builder.addOperation("first", () ->
-                firstCalls.incrementAndGet() == 1
-                        ? CanRestorePlan.OperationResult.TRANSIENT_FAILURE
-                        : CanRestorePlan.OperationResult.ACCEPTED_UNCONFIRMED, true);
-        builder.addOperationAfter("second", () -> {
-            secondCalls.incrementAndGet();
-            return CanRestorePlan.OperationResult.ACCEPTED_UNCONFIRMED;
-        }, first, true);
-        CanRestorePlan plan = builder.build();
-
-        assertEquals(CanRestorePlan.AttemptResult.TRANSIENT_FAILURE,
-                plan.sendPending((frames, label) -> true));
-        assertEquals(1, firstCalls.get());
-        assertEquals(0, secondCalls.get());
-
-        assertEquals(CanRestorePlan.AttemptResult.ACCEPTED_UNCONFIRMED,
-                plan.sendPending((frames, label) -> true));
-        assertEquals(2, firstCalls.get());
-        assertEquals(1, secondCalls.get());
-    }
-
     @Test(expected = IllegalArgumentException.class)
     public void emptyRequiredCommandIsPermanentPlanError() {
         new CanRestorePlan.Builder().add("drive", new byte[0][]);

@@ -22,13 +22,13 @@ public class VehicleRestorePolicyTest {
     }
 
     @Test
-    public void energyStaysInPrimaryAndRecuperationStaysInTrailingBundle() {
+    public void forceEvOverridesEnergyAndRecuperationStaysInTrailingBundle() {
         Map<String, Integer> primary = new LinkedHashMap<>();
         Map<String, Integer> trailing = new LinkedHashMap<>();
-        VehicleRestorePolicy.appendPrimaryTo(primary, true, "SREV");
+        VehicleRestorePolicy.appendPrimaryTo(primary, true, "SREV", true);
         VehicleRestorePolicy.appendRecuperationTo(trailing, true, "HIGH", "SPORT");
 
-        assertEquals(Integer.valueOf(4), primary.get("IVI_SOC_MODESET"));
+        assertEquals(Integer.valueOf(5), primary.get("IVI_SOC_MODESET"));
         assertFalse(primary.containsKey("HUM_ENERGY_PTREGEN_LEVL"));
         assertEquals(Integer.valueOf(4), trailing.get("HUM_ENERGY_PTREGEN_LEVL"));
         assertFalse(trailing.containsKey("IVI_SOC_MODESET"));
@@ -37,7 +37,7 @@ public class VehicleRestorePolicyTest {
     @Test
     public void disabledOptionalModesDoNotTouchTheirVehicleStates() {
         Map<String, Integer> values = new LinkedHashMap<>();
-        VehicleRestorePolicy.appendPrimaryTo(values, false, "UNKNOWN");
+        VehicleRestorePolicy.appendPrimaryTo(values, false, "UNKNOWN", false);
         VehicleRestorePolicy.appendRecuperationTo(values, false, "UNKNOWN", "COMFORT");
 
         assertFalse(values.containsKey("IVI_SOC_MODESET"));

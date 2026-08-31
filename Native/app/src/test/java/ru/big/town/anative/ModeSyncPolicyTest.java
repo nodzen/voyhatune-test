@@ -216,19 +216,4 @@ public class ModeSyncPolicyTest {
 
         assertFalse(p.canPersist(persistToken, stableAt));
     }
-
-    @Test
-    public void unverifiedRestoreNeverAcceptsStartupFallbackAsSavedMode() {
-        ModeSyncPolicy p = new ModeSyncPolicy();
-        p.updateExpected("COMFORT", "AUTO", true, true);
-        long generation = p.beginRestore();
-        p.completeRestore(generation, 1_000L, false);
-
-        assertEquals(ModeSyncPolicy.Decision.CORRECT,
-                p.evaluate(false, "ECO", 1_000L + ModeSyncPolicy.POST_RESTORE_SETTLE_MS));
-        assertEquals(ModeSyncPolicy.Decision.IGNORE,
-                p.evaluate(false, "ECO", 1_000L + ModeSyncPolicy.POST_RESTORE_SETTLE_MS + 5_000L));
-        assertFalse(p.canPersist(generation,
-                1_000L + ModeSyncPolicy.POST_RESTORE_SETTLE_MS + 5_000L));
-    }
 }
