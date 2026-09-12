@@ -256,7 +256,7 @@ fi
 adb shell "pkill -f /data/local/bin/load.bin" 2>/dev/null
 adb shell "rm -f /data/local/tmp/voyahtune_load.v2.lock /data/local/tmp/voyah_load.v2.lock" 2>/dev/null
 adb shell "rm -rf /data/local/tmp/voyah_load.lock" 2>/dev/null
-adb shell "ps -ef | grep frida-inject | grep -E 'vd_bypass|steeringwheelkeys|launcherdock|multidisplay|apollo_tech|keyboard_lock_en|keyboard_ru|app_client|fullscreen_client' | grep -v grep | awk '{print \$2}' | xargs kill -9" 2>/dev/null
+adb shell "ps -ef | grep frida-inject | grep -E 'vd_bypass|steeringwheelkeys|launcherdock|multidisplay|apollo_tech|keyboard_lock_en|keyboard_ru|instrumentcard|app_client|fullscreen_client' | grep -v grep | awk '{print \$2}' | xargs kill -9" 2>/dev/null
 # Eternalized agent живёт в target без frida-inject; force-stop выгружает его до финального reboot.
 adb shell "am force-stop com.qinggan.app.vehiclesetting" 2>/dev/null
 adb shell "am force-stop com.qinggan.app.qgime" 2>/dev/null
@@ -271,6 +271,7 @@ adb shell "rm -f /data/local/bin/vd_bypass.js"
 adb shell "rm -f /data/local/bin/steeringwheelkeys.js /data/local/bin/launcherdock.js /data/local/bin/multidisplay.js /data/local/bin/keymng2.js"   # keymng2 — легаси до объединения хуков руля
 # Apollo entitlement hook принадлежит Open Voyah и при remove удаляется без восстановления backup.
 adb shell "rm -f /data/local/bin/apollo_tech.js /data/local/bin/apollo_tech.js.new"
+adb shell "rm -f /data/local/bin/instrumentcard.js /data/local/bin/instrumentcard.js.voyahtune.new"
 adb shell "rm -f /data/local/bin/keyboard_lock_en.js /data/local/bin/keyboard_ru.js /data/local/bin/voyahtune_keyboard_en_config.json /data/local/bin/voyahtune_keyboard_ru_config.json /data/local/bin/voyahtune_skb_qwerty_ru.json"
 adb shell "rm -f /data/local/bin/app_client.js /data/local/bin/app_client.js.voyahtune.new /data/local/bin/fullscreen_client.js /data/local/bin/fullscreen_client.js.voyahtune.new /data/local/tmp/voyahtune_app_client.* /data/local/tmp/voyahtune_fullscreen_client.*"
 adb shell "rm -f /data/local/bin/voyahtune-hook-manifest.json /data/local/tmp/voyahtune-hook-status.v1 /data/local/tmp/voyahtune-hook-status.v1.*.new"
@@ -287,6 +288,8 @@ if ! adb shell '
         /data/local/bin/keymng2.js \
         /data/local/bin/apollo_tech.js \
         /data/local/bin/apollo_tech.js.new \
+        /data/local/bin/instrumentcard.js \
+        /data/local/bin/instrumentcard.js.voyahtune.new \
         /data/local/bin/keyboard_lock_en.js \
         /data/local/bin/keyboard_ru.js \
         /data/local/bin/voyahtune_keyboard_en_config.json \
@@ -300,6 +303,10 @@ if ! adb shell '
         /data/local/tmp/voyahtune_apollo.attempt \
         /data/local/tmp/voyahtune_apollo.txt \
         /data/local/tmp/voyahtune_apollo.txt.try \
+        /data/local/tmp/voyahtune_instrumentcard.pid \
+        /data/local/tmp/voyahtune_instrumentcard.attempt \
+        /data/local/tmp/voyahtune_instrumentcard.txt \
+        /data/local/tmp/voyahtune_instrumentcard.txt.try \
         /data/local/tmp/voyahtune_load.v2.lock \
         /data/local/tmp/voyahtune_vd.pid \
         /data/local/tmp/voyahtune_vd.attempt \
@@ -356,6 +363,8 @@ if ! adb shell '
         /data/local/bin/keymng2.js \
         /data/local/bin/apollo_tech.js \
         /data/local/bin/apollo_tech.js.new \
+        /data/local/bin/instrumentcard.js \
+        /data/local/bin/instrumentcard.js.voyahtune.new \
         /data/local/bin/keyboard_lock_en.js \
         /data/local/bin/keyboard_ru.js \
         /data/local/bin/voyahtune_keyboard_en_config.json \
@@ -413,6 +422,10 @@ if ! adb shell '
         /data/local/tmp/voyah_apollo.txt \
         /data/local/tmp/voyah_apollo.txt.1 \
         /data/local/tmp/voyah_apollo.txt.try \
+        /data/local/tmp/voyahtune_instrumentcard.pid \
+        /data/local/tmp/voyahtune_instrumentcard.attempt \
+        /data/local/tmp/voyahtune_instrumentcard.txt \
+        /data/local/tmp/voyahtune_instrumentcard.txt.try \
         /data/local/tmp/open_voyah_dns_overlay.sh \
         /data/local/tmp/open_voyah_yandex_dns.apk \
         /data/local/open_voyah \
@@ -442,6 +455,9 @@ if ! adb shell '
         voyahtune_dockPassenger1Dpi voyahtune_dockPassenger2Dpi \
         voyahtune_screen_lift_type voyahtune_win_compact_bottom \
         voyahtune_fullscreen_apps \
+        voyahtune_home_widgets_left_small voyahtune_home_widgets_left_big \
+        voyahtune_home_widgets_right_small voyahtune_home_widgets_right_big \
+        voyahtune_instrument_now_playing voyahtune_home_third_party_media \
         voyahtune_steerStarShort voyahtune_steerStarLong \
         voyahtune_steerDvrShort voyahtune_steerDvrLong \
         voyahtune_steerVoiceShort voyahtune_steerVoiceLong \

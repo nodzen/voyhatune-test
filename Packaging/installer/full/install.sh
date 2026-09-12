@@ -28,7 +28,7 @@ fi
 # Полный локальный preflight до первого ADB-вызова.
 for FULL_REQUIRED_ASSET in load.bin steeringwheelkeys.js launcherdock.js multidisplay.js vd_bypass.js \
         app_client.js \
-        apollo_tech.js keyboard_lock_en.js keyboard_ru.js voyahtune-hook-manifest.json \
+        apollo_tech.js keyboard_lock_en.js keyboard_ru.js instrumentcard.js voyahtune-hook-manifest.json \
         voyahtune_keyboard_en_config.json \
         voyahtune_keyboard_ru_config.json voyahtune_skb_qwerty_ru.json \
         frida-inject-16.2.1-android-arm64 voyahtune.load.rc \
@@ -65,14 +65,15 @@ verify_hook_manifest_entry() {
 }
 
 if [ "$(grep -F -x -c '  \"schemaVersion\": 1,' voyahtune-hook-manifest.json)" -ne 1 ] \
-        || [ "$(grep -F -c '{\"id\":' voyahtune-hook-manifest.json)" -ne 7 ] \
+        || [ "$(grep -F -c '{\"id\":' voyahtune-hook-manifest.json)" -ne 8 ] \
         || ! verify_hook_manifest_entry vd-bypass system_server vd_bypass.js \
         || ! verify_hook_manifest_entry steering-wheel com.qinggan.keymanager.service steeringwheelkeys.js \
         || ! verify_hook_manifest_entry launcher-dock com.qinggan.app.launcher launcherdock.js \
         || ! verify_hook_manifest_entry multi-display com.qinggan.systemservice multidisplay.js \
         || ! verify_hook_manifest_entry apollo-tech com.qinggan.app.vehiclesetting apollo_tech.js \
         || ! verify_hook_manifest_entry keyboard-en com.qinggan.app.qgime keyboard_lock_en.js \
-        || ! verify_hook_manifest_entry keyboard-ru com.qinggan.app.qgime keyboard_ru.js; then
+        || ! verify_hook_manifest_entry keyboard-ru com.qinggan.app.qgime keyboard_ru.js \
+        || ! verify_hook_manifest_entry instrument-card com.qinggan.instrumentcard instrumentcard.js; then
     echo "!!! Hook manifest не совпадает с exact process/script/hash contract — устройство не изменялось."
     exit 1
 fi
@@ -618,6 +619,7 @@ backup_pull /data/local/bin/steeringwheelkeys.js   steeringwheelkeys.js || exit 
 backup_pull /data/local/bin/launcherdock.js        launcherdock.js || exit 1
 backup_pull /data/local/bin/multidisplay.js        multidisplay.js || exit 1
 backup_pull /data/local/bin/vd_bypass.js           vd_bypass.js || exit 1
+backup_pull /data/local/bin/instrumentcard.js      instrumentcard.js || exit 1
 backup_pull /data/local/bin/frida-inject           frida-inject || exit 1
 backup_pull /system/priv-app/Native/Native.apk     Native.apk || exit 1
 backup_pull /system/etc/permissions/privapp-permissions-ru.big.town.anative.xml privapp-permissions-ru.big.town.anative.xml || exit 1
@@ -674,6 +676,7 @@ install_required_data_file app_client.js /data/local/bin/app_client.js 644 || ex
 install_required_data_file apollo_tech.js /data/local/bin/apollo_tech.js 644 || exit 1
 install_required_data_file keyboard_lock_en.js /data/local/bin/keyboard_lock_en.js 644 || exit 1
 install_required_data_file keyboard_ru.js /data/local/bin/keyboard_ru.js 644 || exit 1
+install_required_data_file instrumentcard.js /data/local/bin/instrumentcard.js 644 || exit 1
 install_required_data_file voyahtune_keyboard_en_config.json /data/local/bin/voyahtune_keyboard_en_config.json 644 || exit 1
 install_required_data_file voyahtune_keyboard_ru_config.json /data/local/bin/voyahtune_keyboard_ru_config.json 644 || exit 1
 install_required_data_file voyahtune_skb_qwerty_ru.json /data/local/bin/voyahtune_skb_qwerty_ru.json 644 || exit 1

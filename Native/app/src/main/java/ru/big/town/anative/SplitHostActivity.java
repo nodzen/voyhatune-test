@@ -948,6 +948,8 @@ public class SplitHostActivity extends Activity {
     /** Вернуть выставленную пропорцию в пресет RestoreMode (единственный источник истины). */
     private void saveFraction(float f) {
         if (presetIdx < 0 && (presetId == null || presetId.isEmpty())) return;
+        LastSessionStore.recordSplit(this, left.pkg, right.pkg, getIntent().getIntExtra(EXTRA_RATIO, 1),
+                left.dpi, right.dpi, resizable, f, presetIdx, presetId);
         try {
             Intent i = new Intent("ru.big.town.restoremode.SPLIT_RATIO_SAVE");
             i.setClassName("ru.big.town.restoremode",
@@ -1198,11 +1200,17 @@ public class SplitHostActivity extends Activity {
      * DPI — самим VirtualDisplay, поэтому WindowManager system_server не требует hot-path hooks.
      */
     public static void launchSingle(android.content.Context ctx, String pkg, int dpi, int displayId) {
+        launchSingle(ctx, pkg, dpi, displayId, true);
+    }
+
+    static void launchSingle(android.content.Context ctx, String pkg, int dpi, int displayId,
+                             boolean remember) {
         if (ctx == null || pkg == null || pkg.isEmpty()) {
             Log.w(TAG, "launchSingle: пустой пакет — пропуск");
             return;
         }
         if (displayId != 0 && displayId != 1) displayId = 0;
+        if (remember) LastSessionStore.recordSingleHost(ctx, pkg, dpi, displayId);
         SplitHostTaskLane.get(ctx).requestSingleHost(pkg, Math.max(0, dpi), displayId);
     }
 
@@ -1244,9 +1252,20 @@ public class SplitHostActivity extends Activity {
     public static void launchSplit(android.content.Context ctx, String left, String right, int ratio,
                                    int leftDpi, int rightDpi, boolean resizable, float split,
                                    int presetIdx, String presetId) {
+        launchSplit(ctx, left, right, ratio, leftDpi, rightDpi, resizable, split,
+                presetIdx, presetId, true);
+    }
+
+    static void launchSplit(android.content.Context ctx, String left, String right, int ratio,
+                            int leftDpi, int rightDpi, boolean resizable, float split,
+                            int presetIdx, String presetId, boolean remember) {
         if (left == null || left.isEmpty() || right == null || right.isEmpty()) {
             Log.w(TAG, "launchSplit: пустой пакет — пропуск");
             return;
+        }
+        if (remember) {
+            LastSessionStore.recordSplit(ctx, left, right, ratio, leftDpi, rightDpi,
+                    resizable, split, presetIdx, presetId);
         }
         try {
             android.provider.Settings.Global.putInt(ctx.getContentResolver(), "enable_freeform_support", 1);

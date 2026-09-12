@@ -496,15 +496,19 @@ public class SetModesReceiverDynamic extends BroadcastReceiver {
                     BackButtonService.performBack(ctx);
                 } else if (action.startsWith("app:")) {
                     // Открыть отдельное приложение (freeform-окно на display 0), закрыв активный сплит.
-                    openFreeformApp(ctx, action.substring("app:".length()));
-                    Log.i(TAG, "STEER_ACTION → приложение " + action.substring("app:".length()));
-                } else if (action.startsWith("split:")) {
-                    launchSteerSplit(ctx, action);
-                } else if ("open_voyahtune".equals(action)) {
-                    openVoyahTune(ctx);
-                } else {
-                    Log.i(TAG, "STEER_ACTION неизвестно: " + action);
+                openFreeformApp(ctx, action.substring("app:".length()));
+                Log.i(TAG, "STEER_ACTION → приложение " + action.substring("app:".length()));
+            } else if (action.startsWith("split:")) {
+                launchSteerSplit(ctx, action);
+            } else if ("open_voyahtune".equals(action)) {
+                openVoyahTune(ctx);
+            } else if ("last_session".equals(action)) {
+                if (!LastSessionStore.restore(ctx)) {
+                    Log.i(TAG, "STEER_ACTION → последняя сессия отсутствует или недоступна");
                 }
+            } else {
+                Log.i(TAG, "STEER_ACTION неизвестно: " + action);
+            }
             } finally {
                 completeSteerAction(completion);
             }
@@ -565,7 +569,7 @@ public class SetModesReceiverDynamic extends BroadcastReceiver {
 
     /** Открыть приложение обычной задачей на физическом экране; vd_bypass.js ужмёт рамку окна. */
     static void openFreeformApp(Context context, String pkg) {
-        openFreeformApp(context, pkg, 0);
+        openFreeformApp(context, pkg, 0, true);
     }
 
     /**
@@ -578,10 +582,15 @@ public class SetModesReceiverDynamic extends BroadcastReceiver {
      * пассажирском. Сворачивание там же не помогало — задача никуда с display 1 не девалась.
      */
     static void openFreeformApp(Context context, String pkg, int displayId) {
+        openFreeformApp(context, pkg, displayId, true);
+    }
+
+    static void openFreeformApp(Context context, String pkg, int displayId, boolean remember) {
         if (pkg == null || pkg.isEmpty()) return;
         final Context app = context.getApplicationContext();
         Intent launchIntent = app.getPackageManager().getLaunchIntentForPackage(pkg);
         if (launchIntent == null) { Log.w(TAG, "openFreeformApp: нет launch intent для " + pkg); return; }
+        if (remember) LastSessionStore.recordFreeform(app, pkg, displayId);
         launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         DockLaunchGuard.arm(app, displayId, pkg);
         boolean closedVdHost = SplitHostActivity.closeActiveHost();

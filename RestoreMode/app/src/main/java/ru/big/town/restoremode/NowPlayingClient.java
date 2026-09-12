@@ -27,10 +27,12 @@ import java.io.InputStream;
 public final class NowPlayingClient {
 
     public static final String ACTION_NOW_PLAYING         = "ru.big.town.anative.NOW_PLAYING";
+    public static final String ACTION_NOW_PLAYING_SOURCES = "ru.big.town.anative.NOW_PLAYING_SOURCES";
     public static final String ACTION_REQUEST_NOW_PLAYING = "ru.big.town.anative.REQUEST_NOW_PLAYING";
 
     private static final String AUTHORITY = "ru.big.town.anative.nowplaying";
     public static final Uri CONTENT_URI = Uri.parse("content://" + AUTHORITY);
+    public static final Uri SOURCES_URI = Uri.parse("content://" + AUTHORITY + "/sources");
     public static final Uri ART_URI     = Uri.parse("content://" + AUTHORITY + "/art");
 
     private NowPlayingClient() {}
@@ -50,6 +52,16 @@ public final class NowPlayingClient {
 
         public boolean isPlaying() { return state == PlaybackState.STATE_PLAYING; }
         public boolean isEmpty()   { return title == null || title.isEmpty(); }
+    }
+
+    /** One package with a currently published MediaSession (paused sessions are included). */
+    public static final class Source {
+        public String packageName = "";
+        public String appLabel = "";
+        public String title = "";
+        public String artist = "";
+        public int state = PlaybackState.STATE_NONE;
+        public boolean selected = false;
     }
 
     /** Читает снимок из провайдера Native. Возвращает пустой {@link NowPlaying} при недоступности. */
@@ -75,6 +87,49 @@ public final class NowPlayingClient {
             if (c != null) c.close();
         }
         return np;
+    }
+
+    /** Returns only real active MediaSession sources, never every installed music application. */
+    public static java.util.List<Source> querySources(Context ctx) {
+        java.util.List<Source> result = new java.util.ArrayList<>();
+        Cursor c = null;
+        try {
+            c = ctx.getContentResolver().query(SOURCES_URI, null, null, null, null);
+            if (c != null) {
+                int pkg = c.getColumnIndex("package");
+                int label = c.getColumnIndex("appLabel");
+                int title = c.getColumnIndex("title");
+                int artist = c.getColumnIndex("artist");
+                int state = c.getColumnIndex("state");
+                int selected = c.getColumnIndex("selected");
+                while (c.moveToNext()) {
+                    Source source = new Source();
+                    if (pkg >= 0) source.packageName = nz(c.getString(pkg));
+                    if (label >= 0) source.appLabel = nz(c.getString(label));
+                    if (title >= 0) source.title = nz(c.getString(title));
+                    if (artist >= 0) source.artist = nz(c.getString(artist));
+                    if (state >= 0) source.state = c.getInt(state);
+                    if (selected >= 0) source.selected = c.getInt(selected) == 1;
+                    if (!source.packageName.isEmpty()) result.add(source);
+                }
+            }
+        } catch (Exception ignored) {
+        } finally {
+            if (c != null) c.close();
+        }
+        return result;
+    }
+
+    /** Asks Native to make an active MediaSession package the selected source. */
+    public static boolean selectSource(Context ctx, String packageName) {
+        if (ctx == null || packageName == null || packageName.trim().isEmpty()) return false;
+        try {
+            android.os.Bundle result = ctx.getContentResolver().call(
+                    CONTENT_URI, "select_source", packageName.trim(), null);
+            return result != null && result.getBoolean("selected", false);
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     /** Снимок из extras broadcast'а {@link #ACTION_NOW_PLAYING} (без запроса к провайдеру). */

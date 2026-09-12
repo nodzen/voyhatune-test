@@ -20,11 +20,11 @@ final class HookStatusContract {
 
     private static final String[] HOOK_IDS = {
             "vd-bypass", "steering-wheel", "launcher-dock", "multi-display",
-            "apollo-tech", "keyboard-en", "keyboard-ru"
+            "apollo-tech", "keyboard-en", "keyboard-ru", "instrument-card"
     };
     private static final String[] HOOK_LABELS = {
             "Окна / VirtualDisplay", "Кнопки руля", "Док лаунчера", "Перенос между экранами",
-            "Apollo ADAS", "Клавиатура EN", "Клавиатура RU"
+            "Apollo ADAS", "Клавиатура EN", "Клавиатура RU", "Сейчас играет на приборке"
     };
 
     private HookStatusContract() {}

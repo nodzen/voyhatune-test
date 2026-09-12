@@ -40,7 +40,7 @@ sha256_file() {
 }
 
 [ "$(grep -F -x -c '  "schemaVersion": 1,' "$MANIFEST")" -eq 1 ] || fail "schemaVersion != 1"
-[ "$(grep -F -c '{"id":' "$MANIFEST")" -eq 7 ] || fail "manifest must contain seven exact scripts"
+[ "$(grep -F -c '{"id":' "$MANIFEST")" -eq 8 ] || fail "manifest must contain eight exact scripts"
 
 check_entry() {
     id=$1 process=$2 script=$3
@@ -59,6 +59,7 @@ check_entry multi-display com.qinggan.systemservice multidisplay.js
 check_entry apollo-tech com.qinggan.app.vehiclesetting apollo_tech.js
 check_entry keyboard-en com.qinggan.app.qgime keyboard_lock_en.js
 check_entry keyboard-ru com.qinggan.app.qgime keyboard_ru.js
+check_entry instrument-card com.qinggan.instrumentcard instrumentcard.js
 
 require "$LOADER" 'HOOK_SET_VALID=ok'
 require "$LOADER" 'if [ "$HOOK_SET_VALID" != ok ]; then'
@@ -150,11 +151,11 @@ require "$FULL_INSTALL_BAT" 'if not "!HOOK_HASH_LINE:~64,1!"==""'
 require "$FULL_INSTALL_BAT" 'for %%C in (0 1 2 3 4 5 6 7 8 9 a b c d e f A B C D E F)'
 require "$FULL_INSTALL_BAT" 'findstr.exe /N "^" "voyahtune-hook-manifest.json"'
 require "$FULL_INSTALL_BAT" 'findstr.exe /R /N "^$" "voyahtune-hook-manifest.json"'
-require "$FULL_INSTALL_BAT" 'if not "%HOOK_MANIFEST_SOURCE_LINES%"=="12"'
+require "$FULL_INSTALL_BAT" 'if not "%HOOK_MANIFEST_SOURCE_LINES%"=="13"'
 require "$FULL_INSTALL_BAT" 'findstr.exe /R /X "[0-9][0-9]*:"'
 require "$FULL_INSTALL_BAT" 'fc.exe /B "%HOOK_ACTUAL_NORMALIZED%" "%HOOK_EXPECTED_NORMALIZED%"'
-[ "$(grep -F -c 'call :compute_sha256 ' "$FULL_INSTALL_BAT")" -eq 7 ] \
-    || fail "full install.bat must hash exactly seven hook scripts"
+[ "$(grep -F -c 'call :compute_sha256 ' "$FULL_INSTALL_BAT")" -eq 8 ] \
+    || fail "full install.bat must hash exactly eight hook scripts"
 [ "$(grep -F -c 'del "%HOOK_EXPECTED_MANIFEST%" "%HOOK_ACTUAL_NORMALIZED%" "%HOOK_EXPECTED_NORMALIZED%"' "$FULL_INSTALL_BAT")" -ge 3 ] \
     || fail "full install.bat must clean every manifest temp on entry/success/failure"
 for expected_mapping in \
@@ -164,7 +165,8 @@ for expected_mapping in \
         '"id":"multi-display","process":"com.qinggan.systemservice","script":"multidisplay.js"' \
         '"id":"apollo-tech","process":"com.qinggan.app.vehiclesetting","script":"apollo_tech.js"' \
         '"id":"keyboard-en","process":"com.qinggan.app.qgime","script":"keyboard_lock_en.js"' \
-        '"id":"keyboard-ru","process":"com.qinggan.app.qgime","script":"keyboard_ru.js"'; do
+        '"id":"keyboard-ru","process":"com.qinggan.app.qgime","script":"keyboard_ru.js"' \
+        '"id":"instrument-card","process":"com.qinggan.instrumentcard","script":"instrumentcard.js"'; do
     require "$FULL_INSTALL_BAT" "$expected_mapping"
 done
 full_bat_manifest_preflight=$(line_first "$FULL_INSTALL_BAT" 'call :verify_hook_manifest')

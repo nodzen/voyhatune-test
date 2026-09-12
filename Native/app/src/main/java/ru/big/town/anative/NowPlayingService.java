@@ -25,6 +25,8 @@ import androidx.core.app.NotificationCompat;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
@@ -56,8 +58,11 @@ public class NowPlayingService extends Service {
 
     private static final String TAG = "$$$ NowPlayingService $$$";
     private static final String CHANNEL_ID = "now_playing_channel";
+    private static final String NATIVE_PREFS = "NativePrefs";
+    private static final String MANUAL_SOURCE_KEY = "voyahtune_media_source_package";
 
     public static final String ACTION_NOW_PLAYING         = "ru.big.town.anative.NOW_PLAYING";
+    public static final String ACTION_NOW_PLAYING_SOURCES = "ru.big.town.anative.NOW_PLAYING_SOURCES";
     public static final String ACTION_REQUEST_NOW_PLAYING = "ru.big.town.anative.REQUEST_NOW_PLAYING";
 
     private static final String ART_FILE_NAME = "nowplaying_art.png";
@@ -143,6 +148,28 @@ public class NowPlayingService extends Service {
     static volatile long sDuration = 0L;
     static volatile boolean sHasArt = false;
     static volatile long sUpdatedAt = 0L;
+    static volatile List<SourceSnapshot> sSources = Collections.emptyList();
+    private static volatile NowPlayingService activeService;
+
+    /** One real active MediaSession exposed to source pickers in launcher and RestoreMode. */
+    static final class SourceSnapshot {
+        final String packageName;
+        final String appLabel;
+        final String title;
+        final String artist;
+        final int state;
+        final boolean selected;
+
+        SourceSnapshot(String packageName, String appLabel, String title, String artist,
+                       int state, boolean selected) {
+            this.packageName = packageName;
+            this.appLabel = appLabel;
+            this.title = title;
+            this.artist = artist;
+            this.state = state;
+            this.selected = selected;
+        }
+    }
 
     /** Файл обложки (приватный для Native; наружу отдаётся через NowPlayingProvider.openFile). */
     static File artFile(Context ctx) {
@@ -161,6 +188,11 @@ public class NowPlayingService extends Service {
     private boolean receiverRegistered;
     private MediaSessionManager msm;
     private volatile MediaController current;        // пишет worker, читает лёгкий callback ingress
+    private volatile List<MediaController> activeControllers = Collections.emptyList();
+    // Empty means automatic priority selection. A source picker sets this package until its
+    // MediaSession disappears, so a paused second player is not immediately replaced by another
+    // active session on the next callback.
+    private String manuallySelectedPackage = "";
     private MediaController.Callback controllerCallback;
     private Bitmap lastWrittenArt;                   // тот же Bitmap не кодируем в PNG на каждый playback callback
 
@@ -177,6 +209,9 @@ public class NowPlayingService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        activeService = this;
+        manuallySelectedPackage = getSharedPreferences(NATIVE_PREFS, MODE_PRIVATE)
+                .getString(MANUAL_SOURCE_KEY, "");
         // Сначала fail-closed сбрасываем legacy-маршрут. Даже если foreground-уведомление не
         // поднимется, старое значение "dispatch" не должно остаться после неудачного запуска.
         synchronized (INSTANCE_CALLBACK_LOCK) {
@@ -274,6 +309,10 @@ public class NowPlayingService extends Service {
             case REBUILD:
                 onSessionsChanged(safeSessions());
                 break;
+            case SOURCES:
+                publishSources(reason);
+                publish(reason);
+                break;
             case REPICK:
                 repick(reason);
                 break;
@@ -315,6 +354,8 @@ public class NowPlayingService extends Service {
             activeWatcherEpoch = watcherEpoch;
         }
         detachAll();
+        activeControllers = controllers == null
+                ? Collections.emptyList() : new ArrayList<>(controllers);
         if (controllers != null) {
             for (MediaController c : controllers) {
                 if (!isActiveInstance()) return;
@@ -330,6 +371,7 @@ public class NowPlayingService extends Service {
                         if (sameController(watchedController, current)) {
                             offerMediaRefresh(MediaRefreshDelivery.Work.PUBLISH, "metadata");
                         }
+                        offerMediaRefresh(MediaRefreshDelivery.Work.SOURCES, "metadata");
                     }
                     @Override public void onPlaybackStateChanged(PlaybackState state) {
                         if (!isActiveWatcher(generation, watcherEpoch)) return;
@@ -346,6 +388,7 @@ public class NowPlayingService extends Service {
                             // still needs current state/position for the selected controller.
                             offerMediaRefresh(MediaRefreshDelivery.Work.PUBLISH, "playback");
                         }
+                        offerMediaRefresh(MediaRefreshDelivery.Work.SOURCES, "playback");
                     }
                     @Override public void onSessionDestroyed() {
                         if (isActiveWatcher(generation, watcherEpoch)) {
@@ -362,13 +405,19 @@ public class NowPlayingService extends Service {
             }
         }
         if (!isActiveInstance()) return;
-        MediaController selected = MediaControlRouter.selectController(
-                controllers, instanceGeneration);
+        MediaController selected = findPackage(controllers, manuallySelectedPackage);
+        if (selected == null) {
+            manuallySelectedPackage = "";
+            getSharedPreferences(NATIVE_PREFS, MODE_PRIVATE).edit()
+                    .remove(MANUAL_SOURCE_KEY).apply();
+            selected = MediaControlRouter.selectController(controllers, instanceGeneration);
+        }
         if (!isActiveInstance()) return;
         current = selected;
         Log.i(TAG, "сессий: " + (controllers == null ? 0 : controllers.size())
                 + ", топ: " + (current != null ? current.getPackageName() : "нет"));
         publishMediaRoute();
+        publishSources("sessions-changed");
         publish("sessions-changed");
     }
 
@@ -381,8 +430,15 @@ public class NowPlayingService extends Service {
         if (!isActiveInstance()) return;
         List<MediaController> controllers = safeSessions();
         if (!isActiveInstance()) return;
-        MediaController pick = MediaControlRouter.selectController(
-                controllers, instanceGeneration);
+        activeControllers = controllers == null
+                ? Collections.emptyList() : new ArrayList<>(controllers);
+        MediaController pick = findPackage(controllers, manuallySelectedPackage);
+        if (pick == null) {
+            manuallySelectedPackage = "";
+            getSharedPreferences(NATIVE_PREFS, MODE_PRIVATE).edit()
+                    .remove(MANUAL_SOURCE_KEY).apply();
+            pick = MediaControlRouter.selectController(controllers, instanceGeneration);
+        }
         if (!isActiveInstance()) return;
         if (!sameController(pick, current)) {
             current = pick;
@@ -390,6 +446,7 @@ public class NowPlayingService extends Service {
                     + (current != null ? current.getPackageName() : "нет"));
         }
         publishMediaRoute();
+        publishSources(reason);
         publish(reason);
     }
 
@@ -484,6 +541,16 @@ public class NowPlayingService extends Service {
         try { return a.getSessionToken().equals(b.getSessionToken()); } catch (Exception e) { return false; }
     }
 
+    private static MediaController findPackage(List<MediaController> controllers, String pkg) {
+        if (controllers == null || pkg == null || pkg.isEmpty()) return null;
+        for (MediaController controller : controllers) {
+            try {
+                if (pkg.equals(controller.getPackageName())) return controller;
+            } catch (Exception ignored) {}
+        }
+        return null;
+    }
+
     /** Снять подписки со всех отслеживаемых сессий (следим за всеми, а не только за выбранной). */
     private void detachCurrent() {
         detachAll();
@@ -492,6 +559,66 @@ public class NowPlayingService extends Service {
     // -------------------------------------------------------------------------
     // Публикация снимка (статик для провайдера + broadcast для UI)
     // -------------------------------------------------------------------------
+
+    /** Rebuilds the source picker from actual active MediaSession controllers, never installed APKs. */
+    private void publishSources(String reason) {
+        if (!isActiveInstance()) return;
+        List<SourceSnapshot> next = new ArrayList<>();
+        List<MediaController> controllers = activeControllers;
+        if (controllers != null) {
+            for (MediaController controller : controllers) {
+                try {
+                    String pkg = nz(controller.getPackageName());
+                    if (pkg.isEmpty()) continue;
+                    MediaMetadata md = controller.getMetadata();
+                    PlaybackState ps = controller.getPlaybackState();
+                    // A controller without either metadata or state is an implementation detail,
+                    // not a usable music source. Paused sessions with metadata remain visible.
+                    if (md == null && ps == null) continue;
+                    String title = md == null ? "" : firstNonEmpty(
+                            md.getString(MediaMetadata.METADATA_KEY_TITLE),
+                            md.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE));
+                    String artist = md == null ? "" : firstNonEmpty(
+                            md.getString(MediaMetadata.METADATA_KEY_ARTIST),
+                            md.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST),
+                            md.getString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE));
+                    int state = ps == null ? PlaybackState.STATE_NONE : ps.getState();
+                    next.add(new SourceSnapshot(pkg, appLabel(pkg), title, artist, state,
+                            sameController(controller, current)));
+                } catch (Exception ignored) {}
+            }
+        }
+        sSources = Collections.unmodifiableList(next);
+        Intent update = new Intent(ACTION_NOW_PLAYING_SOURCES);
+        update.putExtra("count", next.size());
+        update.putExtra("updatedAt", System.currentTimeMillis());
+        enqueueSnapshotBroadcast(update);
+        Log.i(TAG, "publishSources(" + reason + "): " + next.size());
+    }
+
+    /** Selects one package from the current active-session set. */
+    static boolean selectSource(String packageName) {
+        NowPlayingService service = activeService;
+        if (service == null || packageName == null || packageName.trim().isEmpty()) return false;
+        String requested = packageName.trim();
+        return service.dispatchWorker("select-source", () -> {
+            List<MediaController> controllers = service.safeSessions();
+            service.activeControllers = controllers == null
+                    ? Collections.emptyList() : new ArrayList<>(controllers);
+            MediaController selected = findPackage(controllers, requested);
+            if (selected == null) {
+                Log.w(TAG, "selectSource: active MediaSession not found for " + requested);
+                return;
+            }
+            service.manuallySelectedPackage = requested;
+            service.getSharedPreferences(NATIVE_PREFS, MODE_PRIVATE).edit()
+                    .putString(MANUAL_SOURCE_KEY, requested).apply();
+            service.current = selected;
+            service.publishMediaRoute();
+            service.publishSources("source-selected");
+            service.publish("source-selected");
+        });
+    }
 
     private void publish(String reason) {
         if (!isActiveInstance()) return;
@@ -548,6 +675,7 @@ public class NowPlayingService extends Service {
             sHasArt = false;
             sUpdatedAt = System.currentTimeMillis();
         }
+        sSources = Collections.emptyList();
     }
 
     private static Intent buildSnapshotIntent() {
@@ -652,6 +780,8 @@ public class NowPlayingService extends Service {
     @Override
     public void onDestroy() {
         Log.i(TAG, "onDestroy()");
+        if (activeService == this) activeService = null;
+        sSources = Collections.emptyList();
         synchronized (INSTANCE_CALLBACK_LOCK) {
             stopping = true;
             activeWatcherEpoch++;

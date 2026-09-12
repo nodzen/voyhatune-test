@@ -39,7 +39,8 @@ manifest_entry() {
     manifest_entry multi-display com.qinggan.systemservice multidisplay.js ,
     manifest_entry apollo-tech com.qinggan.app.vehiclesetting apollo_tech.js ,
     manifest_entry keyboard-en com.qinggan.app.qgime keyboard_lock_en.js ,
-    manifest_entry keyboard-ru com.qinggan.app.qgime keyboard_ru.js ''
+    manifest_entry keyboard-ru com.qinggan.app.qgime keyboard_ru.js ,
+    manifest_entry instrument-card com.qinggan.instrumentcard instrumentcard.js ''
     printf '  ]\n}\n'
 } > "$STAGE"
 

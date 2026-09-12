@@ -94,6 +94,12 @@ public class MainActivity extends AppCompatActivity {
     private TextView tripTimer, tripStatus;
     // Карточки главного экрана, скрываемые настройками раздела «Главный экран»
     private View tripCard, cardPowerHold, cardWashMode, cardAutoLight, cardPedestrian, cardForcedEv;
+    private View cardNowPlaying;
+    private android.widget.ImageView nowPlayingArt;
+    private TextView nowPlayingTitle, nowPlayingArtist, nowPlayingSource;
+    private android.widget.ProgressBar nowPlayingProgress;
+    private long nowPlayingArtGeneration;
+    private String nowPlayingArtKey = "";
     private boolean tripActive = false, tripInDrive = false;
     private long tripAccumMs = 0L, tripDriveStartElapsed = 0L;
     private String lastTripsJson = "[]"; // снимок лога для экрана истории
@@ -148,6 +154,13 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public void onReceive(Context context, Intent intent) {
             renderBatteryHeat(intent);
+        }
+    };
+
+    private final BroadcastReceiver nowPlayingReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            renderNowPlaying(NowPlayingClient.fromBroadcast(intent));
         }
     };
 
@@ -659,6 +672,12 @@ public class MainActivity extends AppCompatActivity {
         cardPedestrian = findViewById(R.id.cardPedestrian);
         cardForcedEv   = findViewById(R.id.cardForcedEv);
         cardBatteryHeat   = findViewById(R.id.cardBatteryHeat);
+        cardNowPlaying    = findViewById(R.id.cardNowPlaying);
+        nowPlayingArt     = findViewById(R.id.nowPlayingArt);
+        nowPlayingTitle   = findViewById(R.id.nowPlayingTitle);
+        nowPlayingArtist  = findViewById(R.id.nowPlayingArtist);
+        nowPlayingSource  = findViewById(R.id.nowPlayingSource);
+        nowPlayingProgress = findViewById(R.id.nowPlayingProgress);
         batteryHeatIcon   = findViewById(R.id.batteryHeatIcon);
         batteryHeatState  = findViewById(R.id.batteryHeatState);
         batteryHeatTemp   = findViewById(R.id.batteryHeatTemp);
@@ -788,6 +807,10 @@ public class MainActivity extends AppCompatActivity {
         uiHandler.removeCallbacks(tripTick);
         uiHandler.post(tripTick);
         registerReceiver(batteryHeatReceiver, new IntentFilter(ACTION_BATTERY_HEAT_UPDATE), RECEIVER_EXPORTED);
+        registerReceiver(nowPlayingReceiver,
+                new IntentFilter(NowPlayingClient.ACTION_NOW_PLAYING), RECEIVER_EXPORTED);
+        renderNowPlaying(NowPlayingClient.query(this));
+        NowPlayingClient.requestRefresh(this);
         registerReceiver(settingSyncReceiver, new IntentFilter("ru.big.town.anative.SETTING_SYNCED"),
                 BIND_SET_MODES_PERMISSION, null, RECEIVER_EXPORTED);
         registerReceiver(powerHoldStatusReceiver,
@@ -816,6 +839,12 @@ public class MainActivity extends AppCompatActivity {
             cardForcedEv.setVisibility(sharedPreferences.getBoolean("showForcedEv", false) ? View.VISIBLE : View.GONE);
         }
         setCardVisible(cardBatteryHeat, "showBatteryHeat");
+        if (cardNowPlaying != null) {
+            boolean enabled = sharedPreferences.getBoolean("showNowPlaying", true);
+            boolean hasTrack = nowPlayingTitle != null && nowPlayingTitle.getText().length() > 0
+                    && !"Сейчас играет".contentEquals(nowPlayingTitle.getText());
+            cardNowPlaying.setVisibility(enabled && hasTrack ? View.VISIBLE : View.GONE);
+        }
         // Кнопка «История поездок» в виджете — только если история включена.
         View histBtn = findViewById(R.id.buttonTripHistory);
         if (histBtn != null) {
@@ -827,6 +856,43 @@ public class MainActivity extends AppCompatActivity {
     private void setCardVisible(View card, String key) {
         if (card == null) return;
         card.setVisibility(sharedPreferences.getBoolean(key, true) ? View.VISIBLE : View.GONE);
+    }
+
+    private void renderNowPlaying(NowPlayingClient.NowPlaying np) {
+        if (np == null) return;
+        boolean hasTrack = !np.isEmpty() && !np.packageName.isEmpty();
+        if (nowPlayingTitle != null) nowPlayingTitle.setText(hasTrack ? np.title : "Сейчас играет");
+        if (nowPlayingArtist != null) nowPlayingArtist.setText(hasTrack
+                ? (np.artist.isEmpty() ? "—" : np.artist) : "Нет активной медиасессии");
+        if (nowPlayingSource != null) nowPlayingSource.setText(hasTrack
+                ? (np.appLabel.isEmpty() ? np.packageName : np.appLabel) : "");
+        if (nowPlayingProgress != null) {
+            int progress = np.duration > 0
+                    ? (int) Math.max(0, Math.min(1000, (np.position * 1000L) / np.duration)) : 0;
+            nowPlayingProgress.setProgress(progress);
+        }
+        if (!hasTrack || !np.hasArt) {
+            nowPlayingArtKey = "";
+            nowPlayingArtGeneration++;
+            if (nowPlayingArt != null) nowPlayingArt.setImageDrawable(null);
+        } else {
+            String artKey = np.packageName + "|" + np.title + "|" + np.album;
+            if (artKey.equals(nowPlayingArtKey)) {
+                applyMainScreenVisibility();
+                return;
+            }
+            nowPlayingArtKey = artKey;
+            final long generation = ++nowPlayingArtGeneration;
+            new Thread(() -> {
+                android.graphics.Bitmap bitmap = NowPlayingClient.loadArt(this);
+                runOnUiThread(() -> {
+                    if (generation == nowPlayingArtGeneration && nowPlayingArt != null) {
+                        nowPlayingArt.setImageBitmap(bitmap);
+                    }
+                });
+            }, "VoyahTune-now-playing-art").start();
+        }
+        applyMainScreenVisibility();
     }
 
     /** Рисует плитки сплитов по готовым пресетам (иконки приложений + соотношение), 5 в ряд. */
@@ -1010,6 +1076,7 @@ public class MainActivity extends AppCompatActivity {
         super.onPause();
         try { unregisterReceiver(tripReceiver); } catch (Exception ignored) {}
         try { unregisterReceiver(batteryHeatReceiver); } catch (Exception ignored) {}
+        try { unregisterReceiver(nowPlayingReceiver); } catch (Exception ignored) {}
         try { unregisterReceiver(settingSyncReceiver); } catch (Exception ignored) {}
         try { unregisterReceiver(powerHoldStatusReceiver); } catch (Exception ignored) {}
         uiHandler.removeCallbacks(tripTick);

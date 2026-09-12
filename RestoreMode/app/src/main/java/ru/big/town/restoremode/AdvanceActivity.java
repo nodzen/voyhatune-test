@@ -468,6 +468,8 @@ public class AdvanceActivity extends AppCompatActivity {
         bindShowSwitch(R.id.switchShowPedestrian, "showPedestrian");
         bindShowSwitch(R.id.switchShowBatteryHeat, "showBatteryHeat");
         bindShowSwitch(R.id.switchShowForcedEv,   "showForcedEv");
+        bindShowSwitch(R.id.switchShowNowPlaying, "showNowPlaying");
+        initMediaAndHomeWidgetSettings();
 
         // Сохранение истории поездок (отдельно от таймера). Выкл → Native удалит журнал.
         Switch switchSaveHistory = findViewById(R.id.switchSaveTripHistory);
@@ -720,6 +722,109 @@ public class AdvanceActivity extends AppCompatActivity {
         if (sw == null) return;
         sw.setChecked(prefs.getBoolean(key, true));
         sw.setOnCheckedChangeListener((b, checked) -> prefs.edit().putBoolean(key, checked).apply());
+    }
+
+    private void initMediaAndHomeWidgetSettings() {
+        Switch mediaSwitch = findViewById(R.id.switchHomeThirdPartyMedia);
+        if (mediaSwitch != null) {
+            mediaSwitch.setChecked(prefs.getBoolean("homeThirdPartyMedia", true));
+            mediaSwitch.setOnCheckedChangeListener((button, checked) -> {
+                prefs.edit().putBoolean("homeThirdPartyMedia", checked).apply();
+                SplitConfigSync.pushHomeWidgets(this, prefs);
+            });
+        }
+        Switch instrumentSwitch = findViewById(R.id.switchShowInstrumentNowPlaying);
+        if (instrumentSwitch != null) {
+            instrumentSwitch.setChecked(prefs.getBoolean("showInstrumentNowPlaying", true));
+            instrumentSwitch.setEnabled(BuildConfig.IS_FULL);
+            instrumentSwitch.setOnCheckedChangeListener((button, checked) -> {
+                if (!BuildConfig.IS_FULL) return;
+                prefs.edit().putBoolean("showInstrumentNowPlaying", checked).apply();
+                SplitConfigSync.pushHomeWidgets(this, prefs);
+            });
+        }
+        SplitConfigSync.pushHomeWidgets(this, prefs);
+    }
+
+    /** Chooses only sources currently present in Native's MediaSession list. */
+    public void onChooseMediaSource(View ignored) {
+        systemMetricsExecutor.execute(() -> {
+            List<NowPlayingClient.Source> sources = NowPlayingClient.querySources(this);
+            uiHandler.post(() -> showMediaSourcePicker(sources));
+        });
+    }
+
+    private void showMediaSourcePicker(List<NowPlayingClient.Source> sources) {
+        if (sources == null || sources.isEmpty()) {
+            com.google.android.material.snackbar.Snackbar.make(findViewById(R.id.main),
+                    "Нет запущенных медиассессий", com.google.android.material.snackbar.Snackbar.LENGTH_LONG).show();
+            return;
+        }
+        CharSequence[] labels = new CharSequence[sources.size()];
+        int checked = -1;
+        for (int i = 0; i < sources.size(); i++) {
+            NowPlayingClient.Source source = sources.get(i);
+            String name = source.appLabel.isEmpty() ? source.packageName : source.appLabel;
+            String track = source.title.isEmpty() ? "" : "  ·  " + source.title
+                    + (source.artist.isEmpty() ? "" : " — " + source.artist);
+            labels[i] = name + track;
+            if (source.selected) checked = i;
+        }
+        final int[] selected = {checked};
+        new com.google.android.material.dialog.MaterialAlertDialogBuilder(this, R.style.DarkDialog)
+                .setTitle("Источник музыки (активные MediaSession)")
+                .setSingleChoiceItems(labels, checked, (dialog, which) -> selected[0] = which)
+                .setPositiveButton("Выбрать", (dialog, which) -> {
+                    if (selected[0] < 0 || selected[0] >= sources.size()) return;
+                    NowPlayingClient.Source source = sources.get(selected[0]);
+                    systemMetricsExecutor.execute(() -> {
+                        boolean ok = NowPlayingClient.selectSource(this, source.packageName);
+                        uiHandler.post(() -> com.google.android.material.snackbar.Snackbar.make(
+                                findViewById(R.id.main), ok ? "Источник выбран" : "Источник уже недоступен",
+                                com.google.android.material.snackbar.Snackbar.LENGTH_SHORT).show());
+                    });
+                })
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
+    /** Opens the four OEM shelf editors; an empty shelf restores the factory order. */
+    public void onConfigureHomeWidgets(View ignored) {
+        if (!BuildConfig.IS_FULL) {
+            com.google.android.material.snackbar.Snackbar.make(findViewById(R.id.main),
+                    "OEM-виджеты доступны в Full-версии", com.google.android.material.snackbar.Snackbar.LENGTH_SHORT).show();
+            return;
+        }
+        new com.google.android.material.dialog.MaterialAlertDialogBuilder(this, R.style.DarkDialog)
+                .setTitle("Какую панель настроить?")
+                .setItems(HomeWidgetStore.REGION_LABELS,
+                        (dialog, which) -> showHomeWidgetRegionEditor(which))
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
+    private void showHomeWidgetRegionEditor(int region) {
+        boolean[] checked = HomeWidgetStore.checked(region,
+                HomeWidgetStore.getCsv(prefs, HomeWidgetStore.REGIONS[region]));
+        new com.google.android.material.dialog.MaterialAlertDialogBuilder(this, R.style.DarkDialog)
+                .setTitle(HomeWidgetStore.REGION_LABELS[region]
+                        + " — выберите виджеты по порядку прошивки")
+                .setMultiChoiceItems(HomeWidgetStore.labels(region), checked,
+                        (dialog, which, selected) -> checked[which] = selected)
+                .setPositiveButton("Сохранить", (dialog, which) -> {
+                    HomeWidgetStore.setCsv(prefs, HomeWidgetStore.REGIONS[region],
+                            HomeWidgetStore.selectedInCatalogOrder(region, checked));
+                    SplitConfigSync.pushHomeWidgets(this, prefs);
+                    com.google.android.material.snackbar.Snackbar.make(findViewById(R.id.main),
+                            "Панель сохранена; пустой выбор = ничего не показывать",
+                            com.google.android.material.snackbar.Snackbar.LENGTH_LONG).show();
+                })
+                .setNeutralButton("Штатный набор", (dialog, which) -> {
+                    prefs.edit().remove(HomeWidgetStore.prefKey(HomeWidgetStore.REGIONS[region])).apply();
+                    SplitConfigSync.pushHomeWidgets(this, prefs);
+                })
+                .setNegativeButton("Отмена", null)
+                .show();
     }
 
     /** Вкл/выкл плавающие кнопки Назад/Home — шлём в SetModesService (тот правит secure settings). */
@@ -1827,6 +1932,7 @@ public class AdvanceActivity extends AppCompatActivity {
     static final String[][] STEER_ACTIONS = {
             {"none",               "Не менять"},
             {"open_voyahtune",     "Открыть VoyahTune"},
+            {"last_session",       "Последняя сессия"},
             {"system_back",        "Системное действие: Назад"},
             {"energy:EV",          "Энергорежим: Electric"},
             {"energy:REV",         "Энергорежим: Fuel"},

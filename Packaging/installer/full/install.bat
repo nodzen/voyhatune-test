@@ -19,7 +19,7 @@ exit /b %FULL_INSTALL_RESULT%
 
 :install_main
 cd /d "%~dp0" || exit /b 1
-for %%F in (adb.exe AdbWinApi.dll AdbWinUsbApi.dll load.bin steeringwheelkeys.js launcherdock.js multidisplay.js vd_bypass.js app_client.js apollo_tech.js keyboard_lock_en.js keyboard_ru.js voyahtune-hook-manifest.json voyahtune_keyboard_en_config.json voyahtune_keyboard_ru_config.json voyahtune_skb_qwerty_ru.json frida-inject-16.2.1-android-arm64 voyahtune.load.rc voyahtune.load.sh init.logcat.original.sh native.apk restore_mode.apk privapp-permissions-ru.big.town.anative.xml dns-overlay.bat dns-overlay-device.sh framework-res__config_ethernet_interfaces_yandexdns.apk install-yandex-dns.bat) do if not exist "%%F" (
+for %%F in (adb.exe AdbWinApi.dll AdbWinUsbApi.dll load.bin steeringwheelkeys.js launcherdock.js multidisplay.js vd_bypass.js app_client.js apollo_tech.js keyboard_lock_en.js keyboard_ru.js instrumentcard.js voyahtune-hook-manifest.json voyahtune_keyboard_en_config.json voyahtune_keyboard_ru_config.json voyahtune_skb_qwerty_ru.json frida-inject-16.2.1-android-arm64 voyahtune.load.rc voyahtune.load.sh init.logcat.original.sh native.apk restore_mode.apk privapp-permissions-ru.big.town.anative.xml dns-overlay.bat dns-overlay-device.sh framework-res__config_ethernet_interfaces_yandexdns.apk install-yandex-dns.bat) do if not exist "%%F" (
     echo !!! Required file %%F is missing. The device was not changed.
     exit /b 1
 )
@@ -111,6 +111,8 @@ call :backup_pull /data/local/bin/multidisplay.js        multidisplay.js
 if errorlevel 1 exit /b 1
 call :backup_pull /data/local/bin/vd_bypass.js           vd_bypass.js
 if errorlevel 1 exit /b 1
+call :backup_pull /data/local/bin/instrumentcard.js      instrumentcard.js
+if errorlevel 1 exit /b 1
 call :backup_pull /data/local/bin/frida-inject           frida-inject
 if errorlevel 1 exit /b 1
 call :backup_pull /system/priv-app/Native/Native.apk     Native.apk
@@ -159,6 +161,8 @@ if errorlevel 1 exit /b 1
 call :install_required_data_file keyboard_lock_en.js /data/local/bin/keyboard_lock_en.js 644
 if errorlevel 1 exit /b 1
 call :install_required_data_file keyboard_ru.js /data/local/bin/keyboard_ru.js 644
+if errorlevel 1 exit /b 1
+call :install_required_data_file instrumentcard.js /data/local/bin/instrumentcard.js 644
 if errorlevel 1 exit /b 1
 call :install_required_data_file voyahtune_keyboard_en_config.json /data/local/bin/voyahtune_keyboard_en_config.json 644
 if errorlevel 1 exit /b 1
@@ -258,7 +262,7 @@ if "%HOOK_VERIFY_RESULT%"=="2" goto :verify_hook_manifest_certutil
 exit /b %HOOK_VERIFY_RESULT%
 
 :verify_hook_manifest_powershell
-powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; try { $root=[Environment]::GetEnvironmentVariable('VOYAHTUNE_MANIFEST_ROOT'); $expected=@([pscustomobject]@{id='vd-bypass';process='system_server';script='vd_bypass.js'},[pscustomobject]@{id='steering-wheel';process='com.qinggan.keymanager.service';script='steeringwheelkeys.js'},[pscustomobject]@{id='launcher-dock';process='com.qinggan.app.launcher';script='launcherdock.js'},[pscustomobject]@{id='multi-display';process='com.qinggan.systemservice';script='multidisplay.js'},[pscustomobject]@{id='apollo-tech';process='com.qinggan.app.vehiclesetting';script='apollo_tech.js'},[pscustomobject]@{id='keyboard-en';process='com.qinggan.app.qgime';script='keyboard_lock_en.js'},[pscustomobject]@{id='keyboard-ru';process='com.qinggan.app.qgime';script='keyboard_ru.js'}); $manifestPath=Join-Path -Path $root -ChildPath 'voyahtune-hook-manifest.json'; $manifest=Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json; $hooks=@($manifest.hooks); if ([int]$manifest.schemaVersion -ne 1 -or $hooks.Count -ne $expected.Count) { Write-Host ('!!! Invalid hook manifest schema/count: schema=' + $manifest.schemaVersion + ' hooks=' + $hooks.Count); exit 1 }; for ($i=0; $i -lt $expected.Count; $i++) { $e=$expected[$i]; $h=$hooks[$i]; if (([string]$h.id) -cne $e.id -or ([string]$h.process) -cne $e.process -or ([string]$h.script) -cne $e.script -or ([string]$h.sha256) -cnotmatch '^[0-9a-f]{64}$') { Write-Host ('!!! Hook manifest mapping mismatch at entry ' + ($i + 1) + ': expected ' + $e.id + '/' + $e.process + '/' + $e.script); exit 1 }; $sourcePath=Join-Path -Path $root -ChildPath $e.script; $actual=(Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash.ToLowerInvariant(); if ($actual -cne ([string]$h.sha256)) { Write-Host ('!!! SHA-256 mismatch for ' + $e.script); Write-Host ('    expected: ' + $h.sha256); Write-Host ('    actual:   ' + $actual); exit 1 } }; exit 0 } catch { Write-Host ('!!! Unicode-safe manifest verification unavailable: ' + $_.Exception.Message); exit 2 }"
+powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; try { $root=[Environment]::GetEnvironmentVariable('VOYAHTUNE_MANIFEST_ROOT'); $expected=@([pscustomobject]@{id='vd-bypass';process='system_server';script='vd_bypass.js'},[pscustomobject]@{id='steering-wheel';process='com.qinggan.keymanager.service';script='steeringwheelkeys.js'},[pscustomobject]@{id='launcher-dock';process='com.qinggan.app.launcher';script='launcherdock.js'},[pscustomobject]@{id='multi-display';process='com.qinggan.systemservice';script='multidisplay.js'},[pscustomobject]@{id='apollo-tech';process='com.qinggan.app.vehiclesetting';script='apollo_tech.js'},[pscustomobject]@{id='keyboard-en';process='com.qinggan.app.qgime';script='keyboard_lock_en.js'},[pscustomobject]@{id='keyboard-ru';process='com.qinggan.app.qgime';script='keyboard_ru.js'},[pscustomobject]@{id='instrument-card';process='com.qinggan.instrumentcard';script='instrumentcard.js'}); $manifestPath=Join-Path -Path $root -ChildPath 'voyahtune-hook-manifest.json'; $manifest=Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json; $hooks=@($manifest.hooks); if ([int]$manifest.schemaVersion -ne 1 -or $hooks.Count -ne $expected.Count) { Write-Host ('!!! Invalid hook manifest schema/count: schema=' + $manifest.schemaVersion + ' hooks=' + $hooks.Count); exit 1 }; for ($i=0; $i -lt $expected.Count; $i++) { $e=$expected[$i]; $h=$hooks[$i]; if (([string]$h.id) -cne $e.id -or ([string]$h.process) -cne $e.process -or ([string]$h.script) -cne $e.script -or ([string]$h.sha256) -cnotmatch '^[0-9a-f]{64}$') { Write-Host ('!!! Hook manifest mapping mismatch at entry ' + ($i + 1) + ': expected ' + $e.id + '/' + $e.process + '/' + $e.script); exit 1 }; $sourcePath=Join-Path -Path $root -ChildPath $e.script; $actual=(Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash.ToLowerInvariant(); if ($actual -cne ([string]$h.sha256)) { Write-Host ('!!! SHA-256 mismatch for ' + $e.script); Write-Host ('    expected: ' + $h.sha256); Write-Host ('    actual:   ' + $actual); exit 1 } }; exit 0 } catch { Write-Host ('!!! Unicode-safe manifest verification unavailable: ' + $_.Exception.Message); exit 2 }"
 exit /b %ERRORLEVEL%
 
 :verify_hook_manifest_certutil
@@ -283,6 +287,8 @@ call :compute_sha256 keyboard_lock_en.js HOOK_HASH_KEYBOARD_EN
 if errorlevel 1 goto :verify_hook_manifest_failed
 call :compute_sha256 keyboard_ru.js HOOK_HASH_KEYBOARD_RU
 if errorlevel 1 goto :verify_hook_manifest_failed
+call :compute_sha256 instrumentcard.js HOOK_HASH_INSTRUMENT_CARD
+if errorlevel 1 goto :verify_hook_manifest_failed
 > "%HOOK_EXPECTED_MANIFEST%" (
     echo {
     echo   "schemaVersion": 1,
@@ -293,7 +299,8 @@ if errorlevel 1 goto :verify_hook_manifest_failed
     echo     {"id":"multi-display","process":"com.qinggan.systemservice","script":"multidisplay.js","sha256":"%HOOK_HASH_MULTI%"},
     echo     {"id":"apollo-tech","process":"com.qinggan.app.vehiclesetting","script":"apollo_tech.js","sha256":"%HOOK_HASH_APOLLO%"},
     echo     {"id":"keyboard-en","process":"com.qinggan.app.qgime","script":"keyboard_lock_en.js","sha256":"%HOOK_HASH_KEYBOARD_EN%"},
-    echo     {"id":"keyboard-ru","process":"com.qinggan.app.qgime","script":"keyboard_ru.js","sha256":"%HOOK_HASH_KEYBOARD_RU%"}
+    echo     {"id":"keyboard-ru","process":"com.qinggan.app.qgime","script":"keyboard_ru.js","sha256":"%HOOK_HASH_KEYBOARD_RU%"},
+    echo     {"id":"instrument-card","process":"com.qinggan.instrumentcard","script":"instrumentcard.js","sha256":"%HOOK_HASH_INSTRUMENT_CARD%"}
     echo   ]
     echo }
 )
@@ -306,7 +313,7 @@ findstr.exe /R /N "^$" "voyahtune-hook-manifest.json" 1>nul 2>nul
 if not errorlevel 1 goto :verify_hook_manifest_failed
 set /a HOOK_MANIFEST_SOURCE_LINES=0
 for /f "usebackq delims=" %%L in ("%HOOK_ACTUAL_NORMALIZED%") do set /a HOOK_MANIFEST_SOURCE_LINES+=1
-if not "%HOOK_MANIFEST_SOURCE_LINES%"=="12" goto :verify_hook_manifest_failed
+if not "%HOOK_MANIFEST_SOURCE_LINES%"=="13" goto :verify_hook_manifest_failed
 findstr.exe /R /X "[0-9][0-9]*:" "%HOOK_ACTUAL_NORMALIZED%" 1>nul 2>nul
 if not errorlevel 1 goto :verify_hook_manifest_failed
 fc.exe /B "%HOOK_ACTUAL_NORMALIZED%" "%HOOK_EXPECTED_NORMALIZED%" 1>nul 2>nul

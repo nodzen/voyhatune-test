@@ -1880,6 +1880,447 @@ Java.perform(function () {
             Log.i(TAG, "[dock] reload receiver registered: " + RELOAD_ACT + " (sdk=" + sdk + ")");
         } catch (e) { Log.e(TAG, "[dock] receiver reg err: " + e); }
 
+        // The OEM media card accepts only its built-in MediaEnum list. Keep that list untouched and
+        // add a fail-open overlay fed by Native's real active MediaSession list. This makes third-party
+        // players selectable without pretending that every installed music APK is available.
+        function installMediaWidgetBridge() {
+            var mediaUri = Java.use("android.net.Uri").parse(
+                    "content://ru.big.town.anative.nowplaying");
+            var mediaSourcesUri = Java.use("android.net.Uri").parse(
+                    "content://ru.big.town.anative.nowplaying/sources");
+            var mediaArtUri = Java.use("android.net.Uri").parse(
+                    "content://ru.big.town.anative.nowplaying/art");
+            var MediaCursor = Java.use("android.database.Cursor");
+            var ViewGroupMedia = Java.use("android.view.ViewGroup");
+            var FrameLayoutMedia = Java.use("android.widget.FrameLayout");
+            var LinearLayoutMedia = Java.use("android.widget.LinearLayout");
+            var ImageViewMedia = Java.use("android.widget.ImageView");
+            var TextViewMedia = Java.use("android.widget.TextView");
+            var ButtonMedia = Java.use("android.widget.Button");
+            var ProgressBarMedia = Java.use("android.widget.ProgressBar");
+            var BitmapFactoryMedia = Java.use("android.graphics.BitmapFactory");
+            var HandlerMedia = Java.use("android.os.Handler");
+            var LooperMedia = Java.use("android.os.Looper");
+            var BroadcastReceiverMedia = Java.use("android.content.BroadcastReceiver");
+            var IntentFilterMedia = Java.use("android.content.IntentFilter");
+            var mainHandlerMedia = HandlerMedia.$new(LooperMedia.getMainLooper());
+            var mediaCards = {};
+            var mediaOverlays = {};
+            var mediaSources = [];
+            var mediaSnapshot = null;
+            var mediaUpdatePending = false;
+            var mediaSourceClick = null;
+            var mediaButtonClick = null;
+            var mediaWidgetHooks = {};
+            var StringMedia = Java.use("java.lang.String");
+
+            function mediaString(value) { return cleanJavaString(value); }
+
+            function mediaColumn(cursor, name, fallback) {
+                try {
+                    var index = cursor.getColumnIndex(name);
+                    return index >= 0 ? mediaString(cursor.getString(index)) : fallback;
+                } catch (e) { return fallback; }
+            }
+
+            function mediaNumber(cursor, name, fallback) {
+                try {
+                    var index = cursor.getColumnIndex(name);
+                    return index >= 0 ? Number(cursor.getLong(index)) : fallback;
+                } catch (e) { return fallback; }
+            }
+
+            function readMediaSnapshot() {
+                var snapshot = {title: "", artist: "", app: "", pkg: "", position: 0,
+                    duration: 0, hasArt: false, updatedAt: 0};
+                var cursor = null;
+                try {
+                    cursor = ctx().getContentResolver().query(mediaUri, null, null, null, null);
+                    if (cursor !== null && cursor.moveToFirst()) {
+                        snapshot.title = mediaColumn(cursor, "title", "");
+                        snapshot.artist = mediaColumn(cursor, "artist", "");
+                        snapshot.app = mediaColumn(cursor, "appLabel", "");
+                        snapshot.pkg = mediaColumn(cursor, "package", "");
+                        snapshot.position = mediaNumber(cursor, "position", 0);
+                        snapshot.duration = mediaNumber(cursor, "duration", 0);
+                        snapshot.hasArt = mediaNumber(cursor, "hasArt", 0) === 1;
+                        snapshot.updatedAt = mediaNumber(cursor, "updatedAt", 0);
+                    }
+                } catch (e) { Log.w(TAG, "[media] snapshot query failed: " + e); }
+                finally { try { if (cursor !== null) cursor.close(); } catch (ignored) {} }
+                return snapshot;
+            }
+
+            function readMediaSources() {
+                var result = [];
+                var cursor = null;
+                try {
+                    cursor = ctx().getContentResolver().query(mediaSourcesUri, null, null, null, null);
+                    if (cursor !== null) {
+                        while (cursor.moveToNext()) {
+                            var pkg = mediaColumn(cursor, "package", "");
+                            if (!pkg) continue;
+                            result.push({pkg: pkg, label: mediaColumn(cursor, "appLabel", pkg),
+                                title: mediaColumn(cursor, "title", ""),
+                                artist: mediaColumn(cursor, "artist", ""),
+                                selected: mediaNumber(cursor, "selected", 0) === 1});
+                        }
+                    }
+                } catch (e) { Log.w(TAG, "[media] source query failed: " + e); }
+                finally { try { if (cursor !== null) cursor.close(); } catch (ignored) {} }
+                return result;
+            }
+
+            function mediaThirdParty(pkg) {
+                pkg = mediaString(pkg);
+                return !!pkg && pkg.indexOf("com.qinggan.") !== 0
+                        && pkg.indexOf("com.pateo.") !== 0
+                        && pkg.indexOf("com.android.") !== 0 && pkg !== "android";
+            }
+
+            function mediaDp(value) {
+                try { return Math.max(1, Math.round(value * ctx().getResources().getDisplayMetrics().density)); }
+                catch (e) { return Math.max(1, Math.round(value)); }
+            }
+
+            function mediaProgress(snapshot) {
+                if (!(snapshot.duration > 0)) return 0;
+                return Math.max(0, Math.min(1000, Math.round(snapshot.position * 1000 / snapshot.duration)));
+            }
+
+            function mediaLoadArt() {
+                try {
+                    var stream = ctx().getContentResolver().openInputStream(mediaArtUri);
+                    if (stream === null) return null;
+                    var bitmap = BitmapFactoryMedia.decodeStream(stream);
+                    stream.close();
+                    return bitmap;
+                } catch (e) { return null; }
+            }
+
+            function mediaAttachCard(card) {
+                if (card === null) return;
+                try {
+                    var retainedCard = Java.retain(card);
+                    var key = "" + Number(Java.use("java.lang.System").identityHashCode(retainedCard));
+                    mediaCards[key] = retainedCard;
+                    Java.scheduleOnMainThread(function () {
+                        try {
+                            if (mediaOverlays[key]) return;
+                            var group = Java.cast(retainedCard, ViewGroupMedia);
+                            var overlay = FrameLayoutMedia.$new(ctx());
+                            overlay.setBackgroundColor(0xE9161A20);
+                            overlay.setPadding(mediaDp(10), mediaDp(8), mediaDp(10), mediaDp(8));
+                            // Keep the overlay limited to the media data row.  A full-card
+                            // transparent child can otherwise intercept OEM card gestures.
+                            var overlayParams = FrameLayoutMedia.LayoutParams.$new(-1, mediaDp(108));
+                            group.addView(overlay, overlayParams);
+                            overlay.setFocusable(false);
+                            overlay.setClickable(false);
+
+                            var row = LinearLayoutMedia.$new(ctx());
+                            row.setOrientation(LinearLayoutMedia.HORIZONTAL.value);
+                            overlay.addView(row, LinearLayoutMedia.LayoutParams.$new(-1, -1));
+
+                            var cover = ImageViewMedia.$new(ctx());
+                            cover.setScaleType(ImageViewMedia.ScaleType.CENTER_CROP.value);
+                            var coverParams = LinearLayoutMedia.LayoutParams.$new(mediaDp(66), mediaDp(66));
+                            coverParams.gravity.value = 16;
+                            coverParams.rightMargin.value = mediaDp(10);
+                            row.addView(cover, coverParams);
+
+                            var details = LinearLayoutMedia.$new(ctx());
+                            details.setOrientation(LinearLayoutMedia.VERTICAL.value);
+                            var detailsParams = LinearLayoutMedia.LayoutParams.$new(0, -1);
+                            detailsParams.weight.value = 1.0;
+                            row.addView(details, detailsParams);
+
+                            var title = TextViewMedia.$new(ctx());
+                            title.setTextColor(0xFFFFFFFF);
+                            title.setTextSize(16);
+                            title.setSingleLine(true);
+                            details.addView(title, LinearLayoutMedia.LayoutParams.$new(-1, -2));
+
+                            var artist = TextViewMedia.$new(ctx());
+                            artist.setTextColor(0xFFB7C0CC);
+                            artist.setTextSize(13);
+                            artist.setSingleLine(true);
+                            details.addView(artist, LinearLayoutMedia.LayoutParams.$new(-1, -2));
+
+                            var progress = null;
+                            try {
+                                progress = ProgressBarMedia.$new(ctx(), null, 0x01010078);
+                                progress.setMax(1000);
+                                details.addView(progress, LinearLayoutMedia.LayoutParams.$new(-1, mediaDp(7)));
+                            } catch (ignoredProgress) {}
+
+                            var sourceButton = ButtonMedia.$new(ctx());
+                            sourceButton.setText("Источник");
+                            sourceButton.setTextSize(11);
+                            sourceButton.setAllCaps(false);
+                            var buttonParams = LinearLayoutMedia.LayoutParams.$new(mediaDp(90), -1);
+                            buttonParams.leftMargin.value = mediaDp(8);
+                            row.addView(sourceButton, buttonParams);
+                            if (mediaButtonClick === null) {
+                                mediaButtonClick = Java.registerClass({
+                                    name: "ru.big.town.launcher.MediaSourceButtonClick",
+                                    implements: [Java.use("android.view.View$OnClickListener")],
+                                    methods: {
+                                        onClick: {
+                                            returnType: "void",
+                                            argumentTypes: ["android.view.View"],
+                                            implementation: function (view) { showMediaSources(); }
+                                        }
+                                    }
+                                });
+                            }
+                            sourceButton.setOnClickListener(mediaButtonClick.$new());
+                            mediaOverlays[key] = {overlay: Java.retain(overlay), cover: Java.retain(cover),
+                                title: Java.retain(title), artist: Java.retain(artist), progress: progress,
+                                source: Java.retain(sourceButton), artKey: ""};
+                            updateMediaOverlays();
+                        } catch (e) { Log.w(TAG, "[media] card attach failed: " + e); }
+                    });
+                } catch (e) { Log.w(TAG, "[media] card retain failed: " + e); }
+            }
+
+            function showMediaSources() {
+                mediaSources = readMediaSources();
+                if (!mediaSources.length) return;
+                var labels = [];
+                for (var i = 0; i < mediaSources.length; i++) {
+                    var source = mediaSources[i];
+                    var track = source.title ? "  ·  " + source.title
+                            + (source.artist ? " — " + source.artist : "") : "";
+                    labels.push((source.label || source.pkg) + track);
+                }
+                try {
+                    if (mediaSourceClick === null) {
+                        mediaSourceClick = Java.registerClass({
+                            name: "ru.town.voyah.MediaSourceDialogClick",
+                            implements: [Java.use("android.content.DialogInterface$OnClickListener")],
+                            methods: {
+                                onClick: {
+                                    returnType: "void",
+                                    argumentTypes: ["android.content.DialogInterface", "int"],
+                                    implementation: function (dialog, which) {
+                                        var index = Number(which);
+                                        if (index < 0 || index >= mediaSources.length) return;
+                                        try {
+                                            ctx().getContentResolver().call(mediaUri, "select_source",
+                                                    mediaSources[index].pkg, null);
+                                        } catch (e) { Log.w(TAG, "[media] source selection failed: " + e); }
+                                        scheduleMediaUpdate();
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    var CharSequenceArray = Java.array("java.lang.CharSequence", labels);
+                    var Builder = Java.use("android.app.AlertDialog$Builder");
+                    var dialog = Builder.$new(ctx());
+                    dialog.setTitle("Источник музыки");
+                    dialog.setItems(CharSequenceArray, mediaSourceClick.$new());
+                    dialog.setNegativeButton("Отмена", null);
+                    dialog.show();
+                } catch (e) { Log.w(TAG, "[media] source dialog failed: " + e); }
+            }
+
+            function updateMediaOverlays(snapshot) {
+                if (snapshot === null || snapshot === undefined) snapshot = mediaSnapshot;
+                if (snapshot === null || snapshot === undefined) snapshot = readMediaSnapshot();
+                mediaSnapshot = snapshot;
+                var enabled = cfg("home_third_party_media") !== "0";
+                var show = enabled && mediaThirdParty(snapshot.pkg) && !!snapshot.title;
+                Object.keys(mediaOverlays).forEach(function (key) {
+                    var view = mediaOverlays[key];
+                    try {
+                        view.overlay.setVisibility(show ? 0 : 8);
+                        if (!show) return;
+                        view.title.setText(snapshot.title);
+                        view.artist.setText((snapshot.artist || snapshot.app || snapshot.pkg));
+                        if (view.progress !== null) view.progress.setProgress(mediaProgress(snapshot));
+                        var artKey = snapshot.pkg + "|" + snapshot.title;
+                        if (snapshot.hasArt && artKey !== view.artKey) {
+                            view.artKey = artKey;
+                            var bitmap = mediaLoadArt();
+                            if (bitmap !== null) view.cover.setImageBitmap(bitmap);
+                        } else if (!snapshot.hasArt) {
+                            view.artKey = "";
+                            view.cover.setImageDrawable(null);
+                        }
+                    } catch (e) { Log.w(TAG, "[media] overlay update failed: " + e); }
+                });
+            }
+
+            function snapshotFromMediaIntent(intent) {
+                if (intent === null || intent === undefined) return null;
+                var snapshot = {title: mediaString(intent.getStringExtra("title")),
+                    artist: mediaString(intent.getStringExtra("artist")),
+                    app: mediaString(intent.getStringExtra("appLabel")),
+                    pkg: mediaString(intent.getStringExtra("package")),
+                    position: Number(intent.getLongExtra("position", 0)),
+                    duration: Number(intent.getLongExtra("duration", 0)),
+                    hasArt: intent.getBooleanExtra("hasArt", false),
+                    updatedAt: Number(intent.getLongExtra("updatedAt", 0))};
+                return snapshot;
+            }
+
+            function scheduleMediaUpdate(snapshot) {
+                if (snapshot !== null && snapshot !== undefined) mediaSnapshot = snapshot;
+                if (mediaUpdatePending) return;
+                mediaUpdatePending = true;
+                setTimeout(function () {
+                    mediaUpdatePending = false;
+                    try { Java.scheduleOnMainThread(function () {
+                        updateMediaOverlays(mediaSnapshot);
+                    }); } catch (e) {}
+                }, 120);
+            }
+
+            function widgetOperation(item) {
+                try { if (item.operation && item.operation.value !== undefined) return mediaString(item.operation.value); }
+                catch (ignored) {}
+                try { return mediaString(item.getOperation()); } catch (ignored2) {}
+                try {
+                    var field = item.getClass().getDeclaredField("operation");
+                    field.setAccessible(true);
+                    return mediaString(field.get(item));
+                } catch (ignored3) {}
+                return "";
+            }
+
+            function configuredWidgetCsv(key) {
+                var region = key.replace("_widget_list", "");
+                try {
+                    // cfg() maps both a missing key and an explicit empty value to "none".
+                    // Here those states differ: missing/empty means stock order, while the
+                    // literal "none" is the user's explicit empty shelf.
+                    var raw = SettingsGlobal.getString(ctx().getContentResolver(),
+                            "voyahtune_home_widgets_" + region);
+                    if (raw === null || raw === "") return null;
+                    return raw.toString() === "none" ? "" : raw.toString();
+                } catch (e) { return null; }
+            }
+
+            function rewriteWidgetJson(raw, key) {
+                var csv = configuredWidgetCsv(key);
+                if (csv === null || !raw) return raw;
+                if (csv === "") return "[]";
+                try {
+                    var list = JSON.parse(raw);
+                    if (!Array.isArray(list)) return raw;
+                    var byOperation = {};
+                    for (var i = 0; i < list.length; i++) {
+                        if (list[i] && list[i].operation) byOperation["" + list[i].operation] = list[i];
+                    }
+                    var result = [];
+                    var wanted = csv.split(",");
+                    for (var j = 0; j < wanted.length; j++) {
+                        if (byOperation[wanted[j]]) result.push(byOperation[wanted[j]]);
+                    }
+                    return JSON.stringify(result);
+                } catch (e) {
+                    Log.w(TAG, "[widgets] JSON rewrite failed for " + key + ": " + e);
+                    return raw;
+                }
+            }
+
+            function installHomeWidgetHooks() {
+                var classes = [];
+                try { classes = Java.enumerateLoadedClassesSync(); } catch (e) { return; }
+                for (var i = 0; i < classes.length; i++) {
+                    var className = "" + classes[i];
+                    if (className.indexOf("VehicleHiBoardDataManager") < 0) continue;
+                    if (mediaWidgetHooks[className]) continue;
+                    try {
+                        var manager = Java.use(className);
+                        if (!manager.getSPWidgetInfoList) continue;
+                        manager.getSPWidgetInfoList.overloads.forEach(function (overload) {
+                            overload.implementation = function () {
+                                var result = overload.apply(this, arguments);
+                                var key = "";
+                                for (var a = 0; a < arguments.length; a++) {
+                                    var candidate = mediaString(arguments[a]);
+                                    if (candidate.indexOf("_widget_list") >= 0) { key = candidate; break; }
+                                }
+                                if (!key || result === null) return result;
+                                var resultClass = "";
+                                try { resultClass = "" + result.getClass().getName(); } catch (ignoredClass) {}
+                                if (resultClass === "java.lang.String") {
+                                    return StringMedia.$new(rewriteWidgetJson("" + result, key));
+                                }
+                                return result;
+                            };
+                        });
+                        mediaWidgetHooks[className] = true;
+                        Log.i(TAG, "[widgets] hook installed " + className);
+                    } catch (e) { Log.w(TAG, "[widgets] hook failed " + className + ": " + e); }
+                }
+            }
+
+            try {
+                var MediaReceiver = Java.registerClass({
+                    name: "ru.town.voyah.MediaWidgetReceiver",
+                    superClass: BroadcastReceiverMedia,
+                    methods: {
+                        onReceive: {
+                            returnType: "void",
+                            argumentTypes: ["android.content.Context", "android.content.Intent"],
+                            implementation: function (context, intent) {
+                                var action = intent === null ? "" : mediaString(intent.getAction());
+                                var snapshot = action === "ru.big.town.anative.NOW_PLAYING"
+                                        ? snapshotFromMediaIntent(intent) : null;
+                                scheduleMediaUpdate(snapshot);
+                                installHomeWidgetHooks();
+                            }
+                        }
+                    }
+                });
+                var receiver = MediaReceiver.$new();
+                var filter = IntentFilterMedia.$new();
+                filter.addAction("ru.big.town.anative.NOW_PLAYING");
+                filter.addAction("ru.big.town.anative.NOW_PLAYING_SOURCES");
+                filter.addAction(RELOAD_ACT);
+                var sdkMedia = Java.use("android.os.Build$VERSION").SDK_INT.value;
+                if (sdkMedia >= 33) {
+                    ctx().registerReceiver.overload("android.content.BroadcastReceiver",
+                            "android.content.IntentFilter", "int").call(ctx(), receiver, filter, 0x2);
+                } else {
+                    ctx().registerReceiver.overload("android.content.BroadcastReceiver",
+                            "android.content.IntentFilter").call(ctx(), receiver, filter);
+                }
+                Log.i(TAG, "[media] active MediaSession bridge registered");
+            } catch (e) { Log.w(TAG, "[media] receiver unavailable: " + e); }
+
+            installHomeWidgetHooks();
+            setTimeout(installHomeWidgetHooks, 1200);
+            setTimeout(installHomeWidgetHooks, 3000);
+            try {
+                Java.choose("com.pateo.voyah.mediaCard.home.view.BigMediaCard", {
+                    onMatch: mediaAttachCard, onComplete: function () {}
+                });
+            } catch (e) { Log.w(TAG, "[media] BigMediaCard unavailable: " + e); }
+            try {
+                Java.choose("com.pateo.voyah.mediaCard.home.view.v97y.DropMediaCard97y", {
+                    onMatch: mediaAttachCard, onComplete: function () {}
+                });
+            } catch (e) { Log.w(TAG, "[media] DropMediaCard97y unavailable: " + e); }
+            setTimeout(function () { try {
+                Java.choose("com.pateo.voyah.mediaCard.home.view.BigMediaCard", {
+                    onMatch: mediaAttachCard, onComplete: function () {}
+                });
+            } catch (e) {} }, 1500);
+            setTimeout(function () { try {
+                Java.choose("com.pateo.voyah.mediaCard.home.view.v97y.DropMediaCard97y", {
+                    onMatch: mediaAttachCard, onComplete: function () {}
+                });
+            } catch (e) {} }, 1500);
+            scheduleMediaUpdate();
+        }
+
+        installMediaWidgetBridge();
+
         // Первичная загрузка конфига + отрисовка иконок на уже живых навбарах. Повторы — на случай,
         // если навбар создаётся чуть позже инъекции (на буте load.bin инжектит рано).
         refreshCache();

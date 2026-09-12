@@ -23,6 +23,7 @@ final class SplitConfigSync {
         pushDock(context, prefs);
         pushSteering(context, prefs);
         pushKeyboard(context, prefs);
+        pushHomeWidgets(context, prefs);
     }
 
     static void pushFrozenApps(Context context, SharedPreferences prefs) {
@@ -85,6 +86,20 @@ final class SplitConfigSync {
         String mode = normalizeKeyboardMode(prefs.getString("keyboardMode", "off"));
         Intent i = configIntent("ru.big.town.anative.KEYBOARD_CONFIG");
         i.putExtra("keyboardMode", mode);
+        context.sendBroadcast(i);
+    }
+
+    /** Publishes OEM home shelves and the instrument-cluster now-playing toggle. */
+    static void pushHomeWidgets(Context context, SharedPreferences prefs) {
+        Intent i = configIntent("ru.big.town.anative.HOME_WIDGETS_CONFIG");
+        for (String region : HomeWidgetStore.REGIONS) {
+            i.putExtra("homeWidgets_" + region,
+                    prefs.getString(HomeWidgetStore.prefKey(region), ""));
+        }
+        i.putExtra("instrumentNowPlaying",
+                prefs.getBoolean("showInstrumentNowPlaying", true));
+        i.putExtra("homeThirdPartyMedia",
+                prefs.getBoolean("homeThirdPartyMedia", true));
         context.sendBroadcast(i);
     }
 

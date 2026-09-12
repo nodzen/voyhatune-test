@@ -47,6 +47,10 @@ public class SetModesConfigReceiver extends BroadcastReceiver {
             applyParkingHeadlightsSetting(context, intent.getBooleanExtra("enabled", false));
             return;
         }
+        if ("ru.big.town.anative.HOME_WIDGETS_CONFIG".equals(action)) {
+            applyHomeWidgetConfig(context, intent);
+            return;
+        }
         if (!BuildConfig.IS_FULL) return;
         if ("ru.big.town.anative.STEER_CONFIG".equals(action)) {
             String[] buttons = {"Star", "Dvr", "Voice", "Phone"};
@@ -164,6 +168,40 @@ public class SetModesConfigReceiver extends BroadcastReceiver {
         } catch (Exception e) {
             Log.e(TAG, "KEYBOARD_CONFIG saved, but Qinggan IME restart failed", e);
         }
+    }
+
+    private static void applyHomeWidgetConfig(Context context, Intent intent) {
+        android.content.ContentResolver resolver = context.getContentResolver();
+        String[] regions = {"left_small", "left_big", "right_small", "right_big"};
+        for (String region : regions) {
+            String value = intent.getStringExtra("homeWidgets_" + region);
+            if (value == null) value = "";
+            // The launcher hook accepts only the small operation alphabet and treats empty as
+            // factory order. The receiver keeps the transport bounded and never stores arbitrary
+            // JSON from the UI process.
+            Settings.Global.putString(resolver, "voyahtune_home_widgets_" + region,
+                    sanitizeWidgetCsv(value));
+        }
+        Settings.Global.putInt(resolver, "voyahtune_instrument_now_playing",
+                intent.getBooleanExtra("instrumentNowPlaying", true) ? 1 : 0);
+        Settings.Global.putInt(resolver, "voyahtune_home_third_party_media",
+                intent.getBooleanExtra("homeThirdPartyMedia", true) ? 1 : 0);
+        Intent reload = new Intent("ru.big.town.anative.DOCK_RELOAD");
+        reload.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
+        context.sendBroadcast(reload);
+        Log.i(TAG, "HOME_WIDGETS_CONFIG применён + launcher/instrument reload");
+    }
+
+    private static String sanitizeWidgetCsv(String value) {
+        if (value == null || value.trim().isEmpty()) return "";
+        StringBuilder out = new StringBuilder();
+        for (String raw : value.split(",")) {
+            String operation = raw.trim();
+            if (!operation.matches("[A-Za-z0-9_]+")) continue;
+            if (out.length() > 0) out.append(',');
+            out.append(operation);
+        }
+        return out.length() == 0 ? "none" : out.toString();
     }
 
     private static String normalizeKeyboardMode(String mode) {

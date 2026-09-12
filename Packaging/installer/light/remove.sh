@@ -73,6 +73,10 @@ if ! adb shell '
         /data/local/bin/voyahtune_keyboard_ru_config.json \
         /data/local/bin/voyahtune_skb_qwerty_ru.json \
         /data/local/bin/voyahtune-hook-manifest.json \
+        /data/local/tmp/voyahtune_instrumentcard.pid \
+        /data/local/tmp/voyahtune_instrumentcard.attempt \
+        /data/local/tmp/voyahtune_instrumentcard.txt \
+        /data/local/tmp/voyahtune_instrumentcard.txt.try \
         /data/local/tmp/voyahtune-hook-status.v1 \
         /data/local/tmp/voyahtune_app_client.* \
         /data/local/tmp/voyahtune_fullscreen_client.* \
@@ -108,6 +112,10 @@ if ! adb shell '
         /data/local/bin/voyahtune_keyboard_ru_config.json \
         /data/local/bin/voyahtune_skb_qwerty_ru.json \
         /data/local/bin/voyahtune-hook-manifest.json \
+        /data/local/tmp/voyahtune_instrumentcard.pid \
+        /data/local/tmp/voyahtune_instrumentcard.attempt \
+        /data/local/tmp/voyahtune_instrumentcard.txt \
+        /data/local/tmp/voyahtune_instrumentcard.txt.try \
         /data/local/tmp/voyahtune-hook-status.v1 \
         /data/local/tmp/voyahtune_keyboard.pid \
         /data/local/tmp/voyahtune_keyboard.attempt \
@@ -144,6 +152,12 @@ if ! adb shell '
         open_voyah_apollo_master open_voyah_apollo_legacy_hook_enabled \
         open_voyah_apollo_asc open_voyah_apollo_sdb \
         open_voyah_apollo_profile_supported open_voyah_apollo_profile_heartbeat; do
+        settings delete global "$setting_name" >/dev/null 2>&1 || exit 1
+    done
+    for setting_name in \
+        voyahtune_home_widgets_left_small voyahtune_home_widgets_left_big \
+        voyahtune_home_widgets_right_small voyahtune_home_widgets_right_big \
+        voyahtune_instrument_now_playing voyahtune_home_third_party_media; do
         settings delete global "$setting_name" >/dev/null 2>&1 || exit 1
     done
     settings delete global voyahtune_keyboard_mode >/dev/null 2>&1 || exit 1

@@ -35,9 +35,11 @@ public class NowPlayingProvider extends ContentProvider {
 
     /** Synchronous command API used by the steering-wheel hook on the initial key DOWN only. */
     public static final String METHOD_MEDIA_COMMAND = "media_command";
+    public static final String METHOD_SELECT_SOURCE = "select_source";
 
     public static final String AUTHORITY = "ru.big.town.anative.nowplaying";
     public static final Uri CONTENT_URI  = Uri.parse("content://" + AUTHORITY);
+    public static final Uri SOURCES_URI  = Uri.parse("content://" + AUTHORITY + "/sources");
     public static final Uri ART_URI      = Uri.parse("content://" + AUTHORITY + "/art");
 
     public static final String[] COLUMNS = {
@@ -52,6 +54,9 @@ public class NowPlayingProvider extends ContentProvider {
             "hasArt",    // 8  0/1
             "updatedAt", // 9  epoch ms последнего обновления снимка
     };
+    public static final String[] SOURCE_COLUMNS = {
+            "package", "appLabel", "title", "artist", "state", "selected"
+    };
 
     @Override
     public boolean onCreate() { return true; }
@@ -59,6 +64,14 @@ public class NowPlayingProvider extends ContentProvider {
     @Override
     public Cursor query(Uri uri, String[] projection, String selection,
                         String[] selectionArgs, String sortOrder) {
+        if (uri != null && "sources".equals(uri.getLastPathSegment())) {
+            MatrixCursor sources = new MatrixCursor(SOURCE_COLUMNS);
+            for (NowPlayingService.SourceSnapshot source : NowPlayingService.sSources) {
+                sources.addRow(new Object[]{source.packageName, source.appLabel, source.title,
+                        source.artist, source.state, source.selected ? 1 : 0});
+            }
+            return sources;
+        }
         MatrixCursor c = new MatrixCursor(COLUMNS);
         c.addRow(new Object[]{
                 NowPlayingService.sTitle,
@@ -85,6 +98,9 @@ public class NowPlayingProvider extends ContentProvider {
 
     @Override
     public String getType(Uri uri) {
+        if (uri != null && "sources".equals(uri.getLastPathSegment())) {
+            return "vnd.android.cursor.dir/nowplaying-source";
+        }
         return uri != null && "art".equals(uri.getLastPathSegment())
                 ? "image/png" : "vnd.android.cursor.item/nowplaying";
     }
@@ -99,6 +115,12 @@ public class NowPlayingProvider extends ContentProvider {
      */
     @Override
     public Bundle call(String method, String arg, Bundle extras) {
+        if (METHOD_SELECT_SOURCE.equals(method)) {
+            enforceSourceSelectionCaller();
+            Bundle result = new Bundle();
+            result.putBoolean("selected", NowPlayingService.selectSource(arg));
+            return result;
+        }
         if (!METHOD_MEDIA_COMMAND.equals(method)) return super.call(method, arg, extras);
         enforceMediaCommandCaller();
 
@@ -130,6 +152,21 @@ public class NowPlayingProvider extends ContentProvider {
         }
         if (!KEYMANAGER_PACKAGE.equals(caller)) {
             throw new SecurityException("media_command is not allowed for " + caller);
+        }
+    }
+
+    private void enforceSourceSelectionCaller() {
+        if (Binder.getCallingUid() == Process.myUid()) return;
+        String caller = null;
+        try {
+            caller = getCallingPackage();
+        } catch (SecurityException e) {
+            Log.w(TAG, "select_source: invalid calling package: " + e.getMessage());
+        }
+        if (!"ru.big.town.restoremode".equals(caller)
+                && !"com.qinggan.app.launcher".equals(caller)
+                && !"com.qinggan.instrumentcard".equals(caller)) {
+            throw new SecurityException("select_source is not allowed for " + caller);
         }
     }
 

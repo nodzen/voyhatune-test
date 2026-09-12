@@ -15,7 +15,8 @@ public class HookStatusContractTest {
             + ";multi-display=failed:102"
             + ";apollo-tech=active:103"
             + ";keyboard-en=disabled:104"
-            + ";keyboard-ru=invalid:104";
+            + ";keyboard-ru=invalid:104"
+            + ";instrument-card=waiting:0";
 
     @Test
     public void validPayloadIsRendered() {
@@ -25,6 +26,7 @@ public class HookStatusContractTest {
         assertTrue(rendered.contains("Окна / VirtualDisplay: активен (PID 100)"));
         assertTrue(rendered.contains("Кнопки руля: устанавливается (PID 101)"));
         assertTrue(rendered.contains("Клавиатура RU: ошибка целостности (PID 104)"));
+        assertTrue(rendered.contains("Сейчас играет на приборке: ожидает процесс"));
     }
 
     @Test

@@ -9,6 +9,7 @@
 #   6) keyboard_*.js         в com.qinggan.app.qgime — только при явном opt-in из «Другого».
 #   7) app_client.js         в выбранных приложениях — client DecorView заполняет место скрытого дока,
 #                            а Yandex/Yango MapKit получает renderer scale выбранного per-app DPI.
+#   8) instrumentcard.js     в com.qinggan.instrumentcard — дополнительный «Сейчас играет» на приборке.
 #
 # НАДЁЖНОСТЬ ИНЪЕКЦИИ (важно!):
 #   • По умолчанию каждая точная process identity (boot-id + pid + start-time) получает НЕ БОЛЕЕ
@@ -125,6 +126,7 @@ MD=/data/local/bin/multidisplay.js
 APOLLO=/data/local/bin/apollo_tech.js
 KEYBOARD_EN=/data/local/bin/keyboard_lock_en.js
 KEYBOARD_RU=/data/local/bin/keyboard_ru.js
+INSTRUMENT_CARD=/data/local/bin/instrumentcard.js
 VDMARK=/data/local/tmp/voyahtune_vd.pid          # exact identity system_server с vd_bypass
 SWK_KM_MARK=/data/local/tmp/voyahtune_swk_km.pid # exact identity keymanager со steeringwheelkeys
 SWK_KM_BUSY=/data/local/tmp/voyahtune_swk_km.busy # symlink: targetPid|startUptime|token
@@ -167,6 +169,10 @@ APP_CLIENT_MAX_RAPID_RESTARTS=2
 SWK_KM_BUSY_TTL=45                            # timeout 30s + 5s KILL + запас на cleanup
 LNCH_MARK=/data/local/tmp/voyahtune_lnch.pid     # exact process identity лаунчера с launcherdock
 MD_MARK=/data/local/tmp/voyahtune_md.pid         # exact process identity systemservice с multidisplay
+INSTRUMENT_CARD_TARGET=com.qinggan.instrumentcard
+INSTRUMENT_CARD_MARK=/data/local/tmp/voyahtune_instrumentcard.pid
+INSTRUMENT_CARD_ATTEMPT=/data/local/tmp/voyahtune_instrumentcard.attempt
+INSTRUMENT_CARD_LOG=/data/local/tmp/voyahtune_instrumentcard.txt
 
 # Status publication is state-change-only. The local file is the root/ADB source of truth; the
 # existing RestoreMode provider receives the same bounded payload so Android 11 app sandboxing does
@@ -268,6 +274,7 @@ publish_hook_status() {
     STATUS_APOLLO=$APOLLO_STATE
     STATUS_KEYBOARD_EN=$KEYBOARD_EN_STATE
     STATUS_KEYBOARD_RU=$KEYBOARD_RU_STATE
+    STATUS_INSTRUMENT_CARD=$INSTRUMENT_CARD_STATE
 
     STATUS_SS_PID=${SS:-0}; [ -n "$STATUS_SS_PID" ] || STATUS_SS_PID=0
     STATUS_KMP_PID=${KMP:-0}; [ -n "$STATUS_KMP_PID" ] || STATUS_KMP_PID=0
@@ -275,6 +282,7 @@ publish_hook_status() {
     STATUS_MDP_PID=${MDP:-0}; [ -n "$STATUS_MDP_PID" ] || STATUS_MDP_PID=0
     STATUS_APOLLO_PID=${APOLLO_PID:-0}; [ -n "$STATUS_APOLLO_PID" ] || STATUS_APOLLO_PID=0
     STATUS_KEYBOARD_PID=${KEYBOARD_PID:-0}; [ -n "$STATUS_KEYBOARD_PID" ] || STATUS_KEYBOARD_PID=0
+    STATUS_INSTRUMENT_CARD_PID=${INSTRUMENT_CARD_PID:-0}; [ -n "$STATUS_INSTRUMENT_CARD_PID" ] || STATUS_INSTRUMENT_CARD_PID=0
 
     HOOK_STATUS_PAYLOAD="v=1;loader=$STATUS_LOADER_STATE;pid=$STATUS_LOADER_PID;manifest=$MANIFEST_SHA"\
 ";vd-bypass=$STATUS_VD:$STATUS_SS_PID"\
@@ -283,7 +291,8 @@ publish_hook_status() {
 ";multi-display=$STATUS_MD:$STATUS_MDP_PID"\
 ";apollo-tech=$STATUS_APOLLO:$STATUS_APOLLO_PID"\
 ";keyboard-en=$STATUS_KEYBOARD_EN:$STATUS_KEYBOARD_PID"\
-";keyboard-ru=$STATUS_KEYBOARD_RU:$STATUS_KEYBOARD_PID"
+";keyboard-ru=$STATUS_KEYBOARD_RU:$STATUS_KEYBOARD_PID"\
+";instrument-card=$STATUS_INSTRUMENT_CARD:$STATUS_INSTRUMENT_CARD_PID"
 
     if [ "$HOOK_STATUS_LOCAL_PAYLOAD" != "$HOOK_STATUS_PAYLOAD" ]; then
         STATUS_STAGE="$HOOK_STATUS_FILE.$$.new"
@@ -1226,6 +1235,26 @@ watchdog_cycle() {
         fi
     fi
 
+    # 2b) Instrument cluster overlay. It is optional at boot (the process is created only when
+    #    the driver's cluster screen is initialized), but once present it gets the same exact
+    #    identity/one-shot guarantees as the other UI hooks.
+    INSTRUMENT_CARD_PID=$(pidof "$INSTRUMENT_CARD_TARGET" 2>/dev/null)
+    INSTRUMENT_CARD_PID=${INSTRUMENT_CARD_PID%% *}
+    INSTRUMENT_CARD_ID=$(process_identity "$INSTRUMENT_CARD_PID" "$INSTRUMENT_CARD_TARGET" 2>/dev/null) \
+        || INSTRUMENT_CARD_ID=
+    load_runtime_hook_state "$INSTRUMENT_CARD_INTEGRITY" "$INSTRUMENT_CARD_ID" \
+        "$INSTRUMENT_CARD_MARK" "$INSTRUMENT_CARD_ATTEMPT"
+    INSTRUMENT_CARD_STATE=$RUNTIME_STATE
+    if [ -n "$INSTRUMENT_CARD_ID" ] && [ "$INSTRUMENT_CARD_STATE" = waiting ]; then
+        if inject_ret "$INSTRUMENT_CARD_PID" "$INSTRUMENT_CARD" "$INSTRUMENT_CARD_LOG" \
+                "$INSTRUMENT_CARD_MARK" "$INSTRUMENT_CARD_ATTEMPT" "$INSTRUMENT_CARD_ID" \
+                "$INSTRUMENT_CARD_TARGET"; then
+            INSTRUMENT_CARD_STATE=active
+        else
+            INSTRUMENT_CARD_STATE=failed
+        fi
+    fi
+
     # 3) VD-хук + freeform в system_server (возвращает управление → verify-before-mark)
     SS=$(pidof system_server)
     SS=${SS%% *}
@@ -1343,6 +1372,7 @@ KMP=; KMP_ID=
 MDP=; MDP_ID=
 APOLLO_PID=; APOLLO_ID=
 KEYBOARD_PID=; KEYBOARD_ID=
+INSTRUMENT_CARD_PID=; INSTRUMENT_CARD_ID=
 VD_STATE=unknown
 SWK_STATE=unknown
 LNCH_STATE=unknown
@@ -1350,12 +1380,13 @@ MD_STATE=unknown
 APOLLO_STATE=unknown
 KEYBOARD_EN_STATE=unknown
 KEYBOARD_RU_STATE=unknown
+INSTRUMENT_CARD_STATE=unknown
 
 MANIFEST_SHA=$(sha256_path "$HOOK_MANIFEST" 2>/dev/null) || MANIFEST_SHA=unavailable
 HOOK_MANIFEST_STRUCTURE=ok
 [ "$(grep -F -x -c '  \"schemaVersion\": 1,' "$HOOK_MANIFEST" 2>/dev/null)" = 1 ] \
     || HOOK_MANIFEST_STRUCTURE=invalid
-[ "$(grep -F -c '{\"id\":' "$HOOK_MANIFEST" 2>/dev/null)" = 7 ] \
+[ "$(grep -F -c '{\"id\":' "$HOOK_MANIFEST" 2>/dev/null)" = 8 ] \
     || HOOK_MANIFEST_STRUCTURE=invalid
 
 VD_INTEGRITY=$(manifest_script_integrity vd-bypass system_server vd_bypass.js "$VD")
@@ -1371,13 +1402,15 @@ KEYBOARD_EN_INTEGRITY=$(manifest_script_integrity keyboard-en com.qinggan.app.qg
     keyboard_lock_en.js "$KEYBOARD_EN")
 KEYBOARD_RU_INTEGRITY=$(manifest_script_integrity keyboard-ru com.qinggan.app.qgime \
     keyboard_ru.js "$KEYBOARD_RU")
+INSTRUMENT_CARD_INTEGRITY=$(manifest_script_integrity instrument-card com.qinggan.instrumentcard \
+    instrumentcard.js "$INSTRUMENT_CARD")
 
-# A manifest is one atomic hook-set contract, not seven independent hints. Any structural,
+# A manifest is one atomic hook-set contract, not eight independent hints. Any structural,
 # mapping, or digest error fails the complete set closed so a partial update cannot mix versions.
 HOOK_SET_VALID=ok
 for SET_INTEGRITY in "$HOOK_MANIFEST_STRUCTURE" "$VD_INTEGRITY" "$SWK_INTEGRITY" \
         "$LNCH_INTEGRITY" "$MD_INTEGRITY" "$APOLLO_INTEGRITY" \
-        "$KEYBOARD_EN_INTEGRITY" "$KEYBOARD_RU_INTEGRITY"; do
+        "$KEYBOARD_EN_INTEGRITY" "$KEYBOARD_RU_INTEGRITY" "$INSTRUMENT_CARD_INTEGRITY"; do
     [ "$SET_INTEGRITY" = ok ] || HOOK_SET_VALID=invalid
 done
 if [ "$HOOK_SET_VALID" != ok ]; then
@@ -1388,6 +1421,7 @@ if [ "$HOOK_SET_VALID" != ok ]; then
     APOLLO_INTEGRITY=invalid
     KEYBOARD_EN_INTEGRITY=invalid
     KEYBOARD_RU_INTEGRITY=invalid
+    INSTRUMENT_CARD_INTEGRITY=invalid
 fi
 
 for INTEGRITY_RECORD in \
@@ -1397,7 +1431,8 @@ for INTEGRITY_RECORD in \
         "multi-display:$MD_INTEGRITY" \
         "apollo-tech:$APOLLO_INTEGRITY" \
         "keyboard-en:$KEYBOARD_EN_INTEGRITY" \
-        "keyboard-ru:$KEYBOARD_RU_INTEGRITY"; do
+        "keyboard-ru:$KEYBOARD_RU_INTEGRITY" \
+        "instrument-card:$INSTRUMENT_CARD_INTEGRITY"; do
     case "$INTEGRITY_RECORD" in
         *:ok) ;;
         *) loge "hook integrity FAIL $INTEGRITY_RECORD; injection disabled" ;;
@@ -1420,6 +1455,7 @@ if [ "$HOOK_SET_VALID" = ok ]; then
     fi
     KEYBOARD_EN_STATE=unknown
     KEYBOARD_RU_STATE=unknown
+    INSTRUMENT_CARD_STATE=waiting
 else
     VD_STATE=invalid
     SWK_STATE=invalid
@@ -1428,6 +1464,7 @@ else
     APOLLO_STATE=invalid
     KEYBOARD_EN_STATE=invalid
     KEYBOARD_RU_STATE=invalid
+    INSTRUMENT_CARD_STATE=invalid
 fi
 publish_hook_status running
 

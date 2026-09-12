@@ -119,6 +119,8 @@ remove_full_hook_runtime_for_light() {
             /data/local/bin/steeringwheelkeys.js.voyahtune.new \
             /data/local/bin/launcherdock.js \
             /data/local/bin/launcherdock.js.voyahtune.new \
+            /data/local/bin/instrumentcard.js \
+            /data/local/bin/instrumentcard.js.voyahtune.new \
             /data/local/bin/multidisplay.js \
             /data/local/bin/multidisplay.js.voyahtune.new \
             /data/local/bin/keymng2.js \
@@ -149,6 +151,10 @@ remove_full_hook_runtime_for_light() {
             /data/local/tmp/voyahtune_lnch.attempt \
             /data/local/tmp/voyahtune_lnch.txt \
             /data/local/tmp/voyahtune_lnch.txt.try \
+            /data/local/tmp/voyahtune_instrumentcard.pid \
+            /data/local/tmp/voyahtune_instrumentcard.attempt \
+            /data/local/tmp/voyahtune_instrumentcard.txt \
+            /data/local/tmp/voyahtune_instrumentcard.txt.try \
             /data/local/tmp/voyahtune_md.pid \
             /data/local/tmp/voyahtune_md.attempt \
             /data/local/tmp/voyahtune_md.txt \
@@ -197,6 +203,7 @@ remove_full_hook_runtime_for_light() {
                 /data/local/bin/vd_bypass.js \
                 /data/local/bin/steeringwheelkeys.js \
                 /data/local/bin/launcherdock.js \
+                /data/local/bin/instrumentcard.js \
                 /data/local/bin/multidisplay.js \
                 /data/local/bin/app_client.js \
                 /data/local/bin/app_client.js.voyahtune.new \

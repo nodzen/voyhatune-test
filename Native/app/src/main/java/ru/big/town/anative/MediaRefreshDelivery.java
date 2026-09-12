@@ -12,6 +12,7 @@ import java.util.concurrent.Executor;
 final class MediaRefreshDelivery {
     enum Work {
         PUBLISH,
+        SOURCES,
         REPICK,
         REBUILD
     }
