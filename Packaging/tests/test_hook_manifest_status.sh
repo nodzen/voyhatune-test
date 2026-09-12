@@ -96,6 +96,8 @@ manifest_line=$(grep -n 'install_required_data_file voyahtune-hook-manifest.json
 [ "$manifest_line" -gt "$script_line" ] || fail "manifest is not published after all scripts"
 require "$FULL_INSTALL" 'setprop ctl.stop voyahtune_load'
 require "$FULL_INSTALL" 'getprop init.svc.voyahtune_load'
+require "$FULL_INSTALL" "grep -F -x -c '  \"schemaVersion\": 1,' voyahtune-hook-manifest.json"
+forbid "$FULL_INSTALL" "grep -F -x -c '  \\\"schemaVersion\\\": 1,' voyahtune-hook-manifest.json"
 forbid "$FULL_INSTALL" 'pgrep -f'
 forbid "$FULL_INSTALL" 'pkill -'
 forbid "$FULL_INSTALL" 'signal_hook_runtime'

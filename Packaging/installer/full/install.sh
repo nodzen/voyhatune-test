@@ -64,7 +64,7 @@ verify_hook_manifest_entry() {
     [ "$HOOK_ACTUAL" = "$HOOK_EXPECTED" ]
 }
 
-if [ "$(grep -F -x -c '  \"schemaVersion\": 1,' voyahtune-hook-manifest.json)" -ne 1 ] \
+if [ "$(grep -F -x -c '  "schemaVersion": 1,' voyahtune-hook-manifest.json)" -ne 1 ] \
         || [ "$(grep -F -c '{\"id\":' voyahtune-hook-manifest.json)" -ne 8 ] \
         || ! verify_hook_manifest_entry vd-bypass system_server vd_bypass.js \
         || ! verify_hook_manifest_entry steering-wheel com.qinggan.keymanager.service steeringwheelkeys.js \
