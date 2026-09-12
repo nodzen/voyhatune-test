@@ -18,8 +18,8 @@ import java.util.function.Consumer;
  * <ul>
  *   <li><b>Два контролируемых worker-а.</b> Долгий wake-retry не задерживает явную команду
  *       пользователя; фактические CAN batch/transactions атомарно сериализует {@link CanSender}.</li>
- *   <li><b>Дебаунс + коалесинг.</b> Пачка событий пробуждения (несколько power-состояний
- *       подряд, SCREEN_ON и т.п.) сворачивается в один цикл — {@link #scheduleApply(String)}.
+ *   <li><b>Коалесинг.</b> Пачка событий пробуждения (несколько power-состояний подряд,
+ *       SCREEN_ON и т.п.) сворачивается в один цикл — {@link #scheduleApply(String)}.
  *       Триггер, пришедший во время уже идущего цикла, считается «покрытым» им и не
  *       порождает второй цикл (см. {@link RestoreRunState}).</li>
  *   <li><b>Ожидание готовности настроек.</b> Настройки читаются из ContentProvider соседнего
@@ -41,20 +41,24 @@ public final class ApplyEngine {
         SKIPPED
     }
 
-    // Дебаунс пачки триггеров пробуждения.
-    /** Lets the Android 11 vehicle stack and OEM CanBus service finish waking before restore. */
-    private static final long DEBOUNCE_MS = 10_000L;
+    // Автоматическое восстановление запускается в следующую очередь Handler сразу после события.
+    // Никакой фиксированной паузы на пробуждение нет: если провайдер/CAN ещё не готовы, цикл
+    // ждёт именно их готовности ниже, а не отсиживает заранее заданные секунды.
+    private static final long AUTOMATIC_DEBOUNCE_MS = 0L;
     // Ожидание готовности настроек: до READY_MAX_ATTEMPTS попыток с паузой READY_RETRY_MS.
     // Первые PROVIDER_ONLY_ATTEMPTS попыток кэш не принимаем — даём провайдеру шанс подняться,
     // чтобы не применить устаревший снимок, когда свежие данные вот-вот будут доступны.
     private static final int  READY_MAX_ATTEMPTS     = 8;
     private static final int  PROVIDER_ONLY_ATTEMPTS = 2;
-    private static final long READY_RETRY_MS         = 2500;
-    // Параметры wake-цикла: НУЖНО набрать WAKE_REPEAT УСПЕШНЫХ проходов (авто может сбрасывать режим,
-    // пока его системы поднимаются после пробуждения) с паузой WAKE_PAUSE между отправками.
-    // 3 успешных прохода с паузой 5 с: отправили → 5 с → отправили → 5 с → отправили.
+    private static final long READY_RETRY_MS         = 1500;
+    // Параметры wake-цикла: первый проход отправляется сразу, а авто-сброс ловится фоновыми
+    // повторениями. Три успешных прохода с короткой паузой быстрее возвращают режим, но сохраняют
+    // защиту от OEM-сброса во время пробуждения.
     private static final int  WAKE_REPEAT = 3;
-    private static final long WAKE_PAUSE  = 5000;
+    private static final long WAKE_PAUSE  = 1500L;
+    // После неудачного CAN-прохода проверяем готовность чаще, чем ждём между успешными проходами.
+    // Первый вызов acquireBinder() сам ждёт Binder до BIND_WAIT_MS, поэтому это не busy-loop.
+    private static final long CAN_READY_RETRY_MS = 250L;
     // На пробуждении CAN-сервис/HAL поднимается не сразу — первые проходы падают (res=-1). Ждём готовности
     // CAN до этого дедлайна (первого успешного прохода), иначе фикс. окно заканчивалось ДО готовности CAN
     // и режим не применялся («нестабильно»).
@@ -65,7 +69,7 @@ public final class ApplyEngine {
 
     private static volatile Handler bg;
     private static volatile Handler commandBg;
-    // Токен для дедупликации отложенного дебаунс-раннабла.
+    // Токен для дедупликации ожидающего runnable.
     private static final Object DEBOUNCE_TOKEN = new Object();
 
     // Все переходы generation/coverage и mode-gate упорядочены этим lock. Сам CAN-цикл lock не держит:
@@ -98,7 +102,7 @@ public final class ApplyEngine {
             runGeneration = RESTORE_RUN_STATE.cancelAndAdvance();
             gateGeneration = MODE_SYNC_POLICY.freeze();
 
-            // Не создаём HandlerThread только ради cancel. Если он уже есть, удаляем pending debounce;
+            // Не создаём HandlerThread только ради cancel. Если он уже есть, удаляем pending runnable;
             // выполняющийся runnable остановится сам на ближайшей cooperative-проверке.
             Handler h = bg;
             if (h != null) h.removeCallbacksAndMessages(DEBOUNCE_TOKEN);
@@ -127,9 +131,44 @@ public final class ApplyEngine {
         MODE_SYNC_POLICY.updateExpected(drive, energy, driveEnabled, energyEnabled);
     }
 
+    static void noteLoadedModes(String drive, String energy, String recycle,
+                                boolean driveEnabled, boolean energyEnabled,
+                                boolean recycleEnabled, boolean rememberModes) {
+        MODE_SYNC_POLICY.updateExpected(
+                drive, energy, recycle,
+                driveEnabled, energyEnabled, recycleEnabled,
+                rememberModes);
+    }
+
+    /** Compatibility overload for the former per-mode provider format. */
+    static void noteLoadedModes(String drive, String energy, String recycle,
+                                boolean driveEnabled, boolean energyEnabled,
+                                boolean recycleEnabled,
+                                boolean driveRememberLast, boolean energyRememberLast,
+                                boolean recycleRememberLast) {
+        MODE_SYNC_POLICY.updateExpected(
+                drive, energy, recycle,
+                driveEnabled, energyEnabled, recycleEnabled,
+                driveRememberLast, energyRememberLast, recycleRememberLast);
+    }
+
     /** Явно сохранённый режим (руль или уже разрешённая внешняя смена) сразу становится ожидаемым. */
     static void noteSavedMode(boolean energy, String mode) {
-        MODE_SYNC_POLICY.updateExpectedMode(energy, mode);
+        noteSavedMode(energy ? "energy" : "driveMode", mode);
+    }
+
+    static void noteSavedMode(String modeKey, String mode) {
+        MODE_SYNC_POLICY.updateExpectedMode(modeKey, mode);
+    }
+
+    /** Немедленно закрывает/открывает feedback persistence для одного режима. */
+    static void noteRememberModes(boolean rememberModes) {
+        MODE_SYNC_POLICY.updateRememberModes(rememberModes);
+    }
+
+    /** Compatibility entry point for old per-mode broadcasts. */
+    static void noteRememberLastMode(String modeKey, boolean rememberLast) {
+        MODE_SYNC_POLICY.updateRememberLast(modeKey, rememberLast);
     }
 
     /**
@@ -137,18 +176,21 @@ public final class ApplyEngine {
      * не перезаписывает provider. Несовпадение запускает коалесцированный корректирующий цикл.
      */
     static boolean shouldPersistModeFeedback(boolean energy, String observedMode) {
+        return shouldPersistModeFeedback(energy ? "energy" : "driveMode", observedMode);
+    }
+
+    static boolean shouldPersistModeFeedback(String modeKey, String observedMode) {
         final ModeSyncPolicy.Decision decision;
         synchronized (RESTORE_LOCK) {
-            decision = MODE_SYNC_POLICY.evaluate(energy, observedMode, SystemClock.uptimeMillis());
+            decision = MODE_SYNC_POLICY.evaluate(modeKey, observedMode, SystemClock.uptimeMillis());
             if (decision == ModeSyncPolicy.Decision.CORRECT) {
-                String kind = energy ? "energy" : "drive";
-                Log.w(TAG, "wake feedback conflicts with saved " + kind + " mode: " + observedMode
+                Log.w(TAG, "wake feedback conflicts with saved " + modeKey + " mode: " + observedMode
                         + " — restoring source of truth again");
                 // Keep evaluation and enqueue ordered against resetRestoreGate(). Otherwise sleep
                 // could freeze/cancel between them and this pre-sleep feedback would enqueue a fresh
                 // restore after reset. Java synchronized is reentrant, so scheduleApply uses the same
                 // lock and reset either happens wholly before or wholly after this correction enqueue.
-                scheduleApply("wake " + kind + " drift " + observedMode);
+                scheduleApply("wake " + modeKey + " drift " + observedMode);
                 return false;
             }
         }
@@ -158,23 +200,29 @@ public final class ApplyEngine {
 
     /** Revalidates stable feedback without holding the restore-cancellation lock across Binder I/O. */
     static void persistModeFeedbackIfAllowed(Context context, boolean energy, String observedMode) {
+        persistModeFeedbackIfAllowed(
+                context, energy ? "energy" : "driveMode", observedMode);
+    }
+
+    static void persistModeFeedbackIfAllowed(
+            Context context, String modeKey, String observedMode) {
         final long gateGeneration;
         synchronized (RESTORE_LOCK) {
-            if (!shouldPersistModeFeedback(energy, observedMode)) return;
+            if (!shouldPersistModeFeedback(modeKey, observedMode)) return;
             gateGeneration = MODE_SYNC_POLICY.currentGeneration();
         }
 
-        if (MainActivity.isLoadedMode(energy, observedMode)) return;
+        if (MainActivity.isLoadedMode(modeKey, observedMode)) return;
 
         // Provider.update/broadcast may block on another process. Revalidate immediately before it,
         // then release RESTORE_LOCK so sleep can cancel CAN even if that external process is stuck.
         synchronized (RESTORE_LOCK) {
             if (!MODE_SYNC_POLICY.canPersist(
-                    gateGeneration, SystemClock.uptimeMillis())) {
+                    gateGeneration, modeKey, SystemClock.uptimeMillis())) {
                 return;
             }
         }
-        MainActivity.persistSavedMode(context, energy, observedMode);
+        MainActivity.persistSavedMode(context, modeKey, observedMode);
     }
 
     private ApplyEngine() {}
@@ -198,8 +246,9 @@ public final class ApplyEngine {
     }
 
     /**
-     * Дебаунс-триггер применения (boot, power-состояния, SCREEN_ON…). Несколько вызовов подряд
-     * сворачиваются в один цикл; триггеры, пришедшие во время идущего цикла, им же и покрыты.
+     * Триггер применения (boot, power-состояния, SCREEN_ON…). Обработчик ставится в следующую
+     * очередь без искусственной паузы; несколько вызовов подряд сворачиваются, а триггеры,
+     * пришедшие во время идущего цикла, им же и покрыты.
      */
     public static void scheduleApply(String reason) {
         final Handler h = bg();
@@ -210,8 +259,8 @@ public final class ApplyEngine {
         final long scheduledAt;
         Log.i(TAG, "scheduleApply: " + reason);
         synchronized (RESTORE_LOCK) {
-            // Закрываем синхронно и ДО дебаунса: WAIT_FOR_VHAL/CanBus reconnect должны опередить
-            // первый VehicleState с системным ECO. Sleep/reset использует этот же lock, поэтому он
+            // Закрываем синхронно ДО постановки runnable: WAIT_FOR_VHAL/CanBus reconnect должны
+            // опередить первый VehicleState с системным ECO. Sleep/reset использует этот же lock, поэтому он
             // либо удалит поставленный runnable, либо schedule уже относится к следующему wake.
             wakeGeneration = RESTORE_RUN_STATE.currentGeneration();
             RESTORE_RUN_STATE.activate(wakeGeneration);
@@ -222,7 +271,7 @@ public final class ApplyEngine {
             h.removeCallbacksAndMessages(DEBOUNCE_TOKEN);
             h.postAtTime(() -> {
                 if (!RESTORE_RUN_STATE.isRestoreCurrent(wakeGeneration, restoreEpoch)) {
-                    Log.i(TAG, "apply debounce cancelled/superseded: " + reason);
+                    Log.i(TAG, "apply cancelled/superseded: " + reason);
                     return;
                 }
 
@@ -253,7 +302,7 @@ public final class ApplyEngine {
                 }
                 applyInternal(WAKE_REPEAT, WAKE_PAUSE, null, gateGeneration,
                         wakeGeneration, restoreEpoch, true);
-            }, DEBOUNCE_TOKEN, scheduledAt + DEBOUNCE_MS);
+            }, DEBOUNCE_TOKEN, scheduledAt + AUTOMATIC_DEBOUNCE_MS);
         }
     }
 
@@ -620,7 +669,8 @@ public final class ApplyEngine {
             }
             if (okPasses >= requiredPasses) break;                     // набрали нужное число успешных
             if (SystemClock.elapsedRealtime() >= deadline) break;      // CAN так и не поднялся вовремя
-            if (!waitWhileCurrent(pause, wakeGeneration, restoreEpoch)) {
+            long waitMs = ok ? pause : CAN_READY_RETRY_MS;
+            if (!waitWhileCurrent(waitMs, wakeGeneration, restoreEpoch)) {
                 return CycleResult.CANCELLED;
             }
         }
@@ -650,7 +700,7 @@ public final class ApplyEngine {
 
         // 3) Кастомные команды пользователя (unlock/wake и т.п.). Пустая настройка исторически
         // представлена как {{}} при default customCommandCount=1. Фильтруем её заранее, иначе даже
-        // без команды цикл делал лишнюю отправку и trailing-паузу 5 с на каждое пробуждение.
+        // без команды цикл делал лишнюю отправку и trailing-паузу на каждое пробуждение.
         if (!RESTORE_RUN_STATE.isRestoreCurrent(wakeGeneration, restoreEpoch)) {
             return CycleResult.CANCELLED;
         }
@@ -700,7 +750,7 @@ public final class ApplyEngine {
         if (ms <= 0) return true;
 
         // elapsedRealtime, в отличие от uptimeMillis, продолжает идти в deep sleep. Это не даёт
-        // паузе 5 с превратиться в «досыпание» после многочасовой стоянки при пропущенном freeze.
+        // паузе превратиться в «досыпание» после многочасовой стоянки при пропущенном freeze.
         long now = SystemClock.elapsedRealtime();
         long deadline = ms > Long.MAX_VALUE - now ? Long.MAX_VALUE : now + ms;
         while (now < deadline) {

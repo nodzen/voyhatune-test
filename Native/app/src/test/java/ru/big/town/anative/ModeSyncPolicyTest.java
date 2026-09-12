@@ -216,4 +216,50 @@ public class ModeSyncPolicyTest {
 
         assertFalse(p.canPersist(persistToken, stableAt));
     }
+
+    @Test
+    public void oneRememberSwitchControlsAllModeFeedback() {
+        ModeSyncPolicy p = new ModeSyncPolicy();
+        p.updateExpected("COMFORT", "SREV", "LOW", true, true, true, false);
+        long generation = p.beginRestore();
+        p.completeRestore(generation, 1_000L);
+        long stableAt = 1_000L + ModeSyncPolicy.POST_RESTORE_SETTLE_MS;
+
+        assertEquals(ModeSyncPolicy.Decision.IGNORE,
+                p.evaluate("driveMode", "SPORT", stableAt));
+        assertEquals(ModeSyncPolicy.Decision.IGNORE,
+                p.evaluate("energy", "EV", stableAt));
+        assertEquals(ModeSyncPolicy.Decision.IGNORE,
+                p.evaluate("recycle", "HIGH", stableAt));
+
+        p.updateRememberModes(true);
+        assertEquals(ModeSyncPolicy.Decision.ACCEPT,
+                p.evaluate("driveMode", "SPORT", stableAt));
+        assertEquals(ModeSyncPolicy.Decision.ACCEPT,
+                p.evaluate("energy", "EV", stableAt));
+        assertEquals(ModeSyncPolicy.Decision.ACCEPT,
+                p.evaluate("recycle", "HIGH", stableAt));
+    }
+
+    @Test
+    public void independentRememberSwitchesOnlyAcceptTheirOwnFeedback() {
+        ModeSyncPolicy p = new ModeSyncPolicy();
+        p.updateExpected("COMFORT", "SREV", "LOW",
+                true, true, true,
+                true, false, true);
+        long generation = p.beginRestore();
+        p.completeRestore(generation, 1_000L);
+        long stableAt = 1_000L + ModeSyncPolicy.POST_RESTORE_SETTLE_MS;
+
+        assertEquals(ModeSyncPolicy.Decision.ACCEPT,
+                p.evaluate("driveMode", "SPORT", stableAt));
+        assertEquals(ModeSyncPolicy.Decision.IGNORE,
+                p.evaluate("energy", "EV", stableAt));
+        assertEquals(ModeSyncPolicy.Decision.ACCEPT,
+                p.evaluate("recycle", "HIGH", stableAt));
+
+        p.updateRememberLast("energy", true);
+        assertEquals(ModeSyncPolicy.Decision.ACCEPT,
+                p.evaluate("energy", "EV", stableAt));
+    }
 }

@@ -27,7 +27,8 @@ fi
 
 # Полный локальный preflight до первого ADB-вызова.
 for FULL_REQUIRED_ASSET in load.bin steeringwheelkeys.js launcherdock.js multidisplay.js vd_bypass.js \
-        apollo_tech.js keyboard_lock_en.js keyboard_ru.js voyahtune-hook-manifest.json \
+        app_client.js \
+        apollo_tech.js keyboard_lock_en.js keyboard_ru.js \
         voyahtune_keyboard_en_config.json \
         voyahtune_keyboard_ru_config.json voyahtune_skb_qwerty_ru.json \
         frida-inject-16.2.1-android-arm64 voyahtune.load.rc \
@@ -39,50 +40,13 @@ for FULL_REQUIRED_ASSET in load.bin steeringwheelkeys.js launcherdock.js multidi
     fi
 done
 
-# The manifest is the commit record for the exact hook set. Validate every script before the first
-# ADB call; it is installed last so a partial copy can never publish a new manifest as complete.
-host_sha256() {
-    if command -v sha256sum >/dev/null 2>&1; then
-        sha256sum "$1" | awk '{print $1}'
-    elif command -v shasum >/dev/null 2>&1; then
-        shasum -a 256 "$1" | awk '{print $1}'
-    else
-        return 1
-    fi
-}
-
-verify_hook_manifest_entry() {
-    HOOK_ID=$1
-    HOOK_PROCESS=$2
-    HOOK_SCRIPT=$3
-    HOOK_EXPECTED=$(sed -n \
-        's/.*"id":"'"$HOOK_ID"'","process":"'"$HOOK_PROCESS"'","script":"'"$HOOK_SCRIPT"'","sha256":"\([0-9a-f]*\)".*/\1/p' \
-        voyahtune-hook-manifest.json)
-    [ "${#HOOK_EXPECTED}" -eq 64 ] || return 1
-    HOOK_ACTUAL=$(host_sha256 "$HOOK_SCRIPT") || return 1
-    [ "$HOOK_ACTUAL" = "$HOOK_EXPECTED" ]
-}
-
-if [ "$(grep -F -x -c '  "schemaVersion": 1,' voyahtune-hook-manifest.json)" -ne 1 ] \
-        || [ "$(grep -F -c '{"id":' voyahtune-hook-manifest.json)" -ne 7 ] \
-        || ! verify_hook_manifest_entry vd-bypass system_server vd_bypass.js \
-        || ! verify_hook_manifest_entry steering-wheel com.qinggan.keymanager.service steeringwheelkeys.js \
-        || ! verify_hook_manifest_entry launcher-dock com.qinggan.app.launcher launcherdock.js \
-        || ! verify_hook_manifest_entry multi-display com.qinggan.systemservice multidisplay.js \
-        || ! verify_hook_manifest_entry apollo-tech com.qinggan.app.vehiclesetting apollo_tech.js \
-        || ! verify_hook_manifest_entry keyboard-en com.qinggan.app.qgime keyboard_lock_en.js \
-        || ! verify_hook_manifest_entry keyboard-ru com.qinggan.app.qgime keyboard_ru.js; then
-    echo "!!! Hook manifest не совпадает с exact process/script/hash contract — устройство не изменялось."
-    exit 1
-fi
-
 adb root
 adb wait-for-device
 adb root
 
 # Просим Android init остановить текущий loader перед публикацией нового комплекта. Это best-effort:
-# каждый файл публикуется atomic mv, manifest идёт последним, а финальный reboot гарантирует запуск
-# уже новой версии. Не сканируем/не убиваем PID: Android 11 toybox даёт ложные self/zombie matches.
+# каждый файл публикуется atomic mv, а финальный reboot гарантирует запуск уже новой версии.
+# Не сканируем/не убиваем PID: Android 11 toybox даёт ложные self/zombie matches.
 stop_hook_runtime_for_update() {
     adb shell '
         setprop ctl.stop voyahtune_load 2>/dev/null || exit 1
@@ -669,6 +633,7 @@ install_required_data_file steeringwheelkeys.js /data/local/bin/steeringwheelkey
 install_required_data_file launcherdock.js /data/local/bin/launcherdock.js 644 || exit 1
 install_required_data_file multidisplay.js /data/local/bin/multidisplay.js 644 || exit 1
 install_required_data_file vd_bypass.js /data/local/bin/vd_bypass.js 644 || exit 1
+install_required_data_file app_client.js /data/local/bin/app_client.js 644 || exit 1
 install_required_data_file apollo_tech.js /data/local/bin/apollo_tech.js 644 || exit 1
 install_required_data_file keyboard_lock_en.js /data/local/bin/keyboard_lock_en.js 644 || exit 1
 install_required_data_file keyboard_ru.js /data/local/bin/keyboard_ru.js 644 || exit 1
@@ -676,8 +641,41 @@ install_required_data_file voyahtune_keyboard_en_config.json /data/local/bin/voy
 install_required_data_file voyahtune_keyboard_ru_config.json /data/local/bin/voyahtune_keyboard_ru_config.json 644 || exit 1
 install_required_data_file voyahtune_skb_qwerty_ru.json /data/local/bin/voyahtune_skb_qwerty_ru.json 644 || exit 1
 install_required_data_file frida-inject-16.2.1-android-arm64 /data/local/bin/frida-inject 755 || exit 1
-# Commit point exact hook-set: scripts above are complete and their hashes were verified locally.
-install_required_data_file voyahtune-hook-manifest.json /data/local/bin/voyahtune-hook-manifest.json 644 || exit 1
+
+# app_client.js заменяет прежний fullscreen_client.js. Сначала новый файл опубликован атомарно,
+# затем выгружаем возможные legacy-agent процессы и удаляем старый файл/оба поколения маркеров.
+echo "=== Миграция client-agent fullscreen_client.js -> app_client.js ==="
+if ! adb shell '
+    fullscreen_csv=$(settings get global voyahtune_fullscreen_apps 2>/dev/null)
+    old_ifs=$IFS
+    IFS=,
+    for app_client_pkg in $fullscreen_csv; do
+        IFS=$old_ifs
+        case "$app_client_pkg" in
+            ""|null|.*|*.|*..*|*[!A-Za-z0-9._]*) IFS=,; continue ;;
+        esac
+        am force-stop "$app_client_pkg" >/dev/null 2>&1
+        IFS=,
+    done
+    IFS=$old_ifs
+    for app_client_pkg in ru.yandex.yandexnavi ru.yandex.yandexmaps com.yango.maps.android; do
+        am force-stop "$app_client_pkg" >/dev/null 2>&1
+    done
+    rm -f /data/local/bin/fullscreen_client.js \
+        /data/local/bin/fullscreen_client.js.voyahtune.new \
+        /data/local/tmp/voyahtune_fullscreen_client.* \
+        /data/local/tmp/voyahtune_app_client.* || exit 1
+    [ -s /data/local/bin/app_client.js ] || exit 1
+    [ ! -e /data/local/bin/fullscreen_client.js ] || exit 1
+    [ ! -e /data/local/bin/fullscreen_client.js.voyahtune.new ] || exit 1
+    ! ls /data/local/tmp/voyahtune_fullscreen_client.* >/dev/null 2>&1 || exit 1
+    ! ls /data/local/tmp/voyahtune_app_client.* >/dev/null 2>&1 || exit 1
+'; then
+    echo "!!! Не удалось завершить миграцию app_client.js — hook-loader будет возвращён."
+    exit 1
+fi
+# Удаляем неиспользуемый manifest, оставшийся от предыдущих full-релизов.
+adb shell "rm -f /data/local/bin/voyahtune-hook-manifest.json /data/local/bin/voyahtune-hook-manifest.json.voyahtune.new" || exit 1
 
 echo "=== Миграция boot-hook предыдущего full-релиза ==="
 if ! migrate_legacy_init_logcat; then
@@ -752,6 +750,9 @@ fi
 adb shell settings put global enable_freeform_support 1
 adb shell settings put global force_resizable_activities 1
 
+# Достпу к не‑SDK‑интерфейсам
+adb shell settings put global hidden_api_policy 1
+
 if ! adb install -r -g restore_mode.apk; then
     echo "!!! RestoreMode не установлен — исправьте ошибку и повторите installer до перезагрузки."
     exit 1
@@ -766,9 +767,10 @@ if ! adb reboot; then
     echo "!!! ADB не смог перезагрузить ГУ; пробуем запустить установленный hook-loader без reboot."
     exit 1
 fi
-# После принятого reboot init сам поднимет полностью зафиксированный set; host-side recovery больше
-# не нужен и не должен гоняться с загрузкой устройства.
+# Reboot принят устройством: старый runtime уже нельзя безопасно перезапускать из exit-trap.
+# После загрузки отдельно проверяем Android package lifecycle и фактический запуск Native.
 HOOK_UPDATE_BARRIER_ARMED=0
+echo "Ожидание загрузки устройства для проверки целостности установки..."
 if ! wait_for_android_boot; then
     echo "!!! ГУ не завершило загрузку после установки; проверьте ADB и повторите installer."
     exit 1

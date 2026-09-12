@@ -31,7 +31,8 @@ public class SplitRatioSaveReceiver extends BroadcastReceiver {
         }
         // Совместимость с Native, установленным до появления стабильных id.
         if (found < 0 && fallbackIdx >= 0 && fallbackIdx < all.size()) found = fallbackIdx;
-        if (found < 0 || !all.get(found).resizable) return;
+        if (found < 0 || !all.get(found).resizable
+                || !SplitStore.isInteractiveDividerEnabled(prefs)) return;
 
         all.get(found).split = split;
         SplitStore.save(prefs, all);

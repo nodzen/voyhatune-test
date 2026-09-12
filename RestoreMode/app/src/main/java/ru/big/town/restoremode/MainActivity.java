@@ -990,7 +990,8 @@ public class MainActivity extends AppCompatActivity {
             b.putInt("rightDpi", rDpi);
             // Изменяемая пропорция: доля левого окна + индекс пресета, чтобы Native вернул новое
             // значение обратно (SPLIT_RATIO_SAVE) и оно пережило перезапуск сплита.
-            b.putBoolean("resizable", preset.resizable);
+            b.putBoolean("resizable", preset.resizable
+                    && SplitStore.isInteractiveDividerEnabled(sharedPreferences));
             b.putFloat("split", SplitStore.leftFraction(preset));
             b.putInt("presetIdx", presetIndex(preset));
             b.putString("presetId", preset.id);

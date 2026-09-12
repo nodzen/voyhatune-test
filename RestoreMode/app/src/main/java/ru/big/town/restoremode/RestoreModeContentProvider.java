@@ -19,9 +19,14 @@ public class RestoreModeContentProvider extends ContentProvider {
     private  String customCommand="";
     private  int customCommandCount=1;
     private  boolean autoLight=false;
+    private  boolean headlightsOffInParking=false;
     private  boolean driveEnabled=false;
     private  boolean recycleEnabled=false;
     private  boolean energyEnabled=false;
+    private boolean driveRememberLast=true;
+    private boolean energyRememberLast=true;
+    private boolean recycleRememberLast=true;
+    private boolean rememberModes=true;
     private  int lightSensorThreshold=3;
     private  int lightSensorThresholdOff=5;
     private  boolean disablePedestrianSound=false;
@@ -108,9 +113,23 @@ public class RestoreModeContentProvider extends ContentProvider {
         customCommand = sharedPreferences.getString("customCommand", "");
         customCommandCount = sharedPreferences.getInt("customCommandCount", 1);
         autoLight = sharedPreferences.getBoolean("autoLight", false);
-        driveEnabled          = sharedPreferences.getBoolean("driveEnabled",          false);
-        recycleEnabled        = sharedPreferences.getBoolean("recycleEnabled",        false);
-        energyEnabled         = sharedPreferences.getBoolean("energyEnabled",         false);
+        headlightsOffInParking = sharedPreferences.getBoolean("headlightsOffInParking", false);
+
+        // The new switches are the restore policy themselves. During an upgrade, prefer their
+        // saved values, then the temporary global switch, then the old per-mode enable switch.
+        // A completely new installation defaults to remembering all three modes.
+        boolean hasLegacyGlobal = sharedPreferences.contains("rememberModes");
+        boolean legacyGlobal = sharedPreferences.getBoolean("rememberModes", true);
+        driveRememberLast = readRememberPreference("driveRememberLast", "driveEnabled",
+                hasLegacyGlobal, legacyGlobal);
+        energyRememberLast = readRememberPreference("energyRememberLast", "energyEnabled",
+                hasLegacyGlobal, legacyGlobal);
+        recycleRememberLast = readRememberPreference("recycleRememberLast", "recycleEnabled",
+                hasLegacyGlobal, legacyGlobal);
+        driveEnabled = driveRememberLast;
+        energyEnabled = energyRememberLast;
+        recycleEnabled = recycleRememberLast;
+        rememberModes = driveRememberLast && energyRememberLast && recycleRememberLast;
         lightSensorThreshold    = sharedPreferences.getInt("lightSensorThreshold",    3);
         lightSensorThresholdOff = sharedPreferences.getInt("lightSensorThresholdOff", 5);
         disablePedestrianSound  = sharedPreferences.getBoolean("disablePedestrianSound", false);
@@ -175,6 +194,11 @@ public class RestoreModeContentProvider extends ContentProvider {
                 ApolloSettings.STOCK_UI,      // 28 — эмуляция подписки/экзамена для штатного UI
                 "pauseMediaOnDoorClose",     // 29 — возобновление музыки после закрытия двери
                 "pauseMediaOnAnyDoor",       // 30 — пауза при открытии любой двери
+                "driveRememberLast",        // 31 — совместимость со старым per-mode форматом
+                "energyRememberLast",       // 32 — совместимость со старым per-mode форматом
+                "recycleRememberLast",      // 33 — совместимость со старым per-mode форматом
+                "rememberModes",            // 34 — единый переключатель запоминания режимов
+                "headlightsOffInParking",  // 35 — выключать наружный свет при выборе P
         });
 
         cursor.addRow(new Object[]{
@@ -205,6 +229,11 @@ public class RestoreModeContentProvider extends ContentProvider {
                 apolloStockUiEnabled ? 1 : 0,
                 pauseMediaOnDoorClose ? 1 : 0,
                 pauseMediaOnAnyDoor ? 1 : 0,
+                driveRememberLast ? 1 : 0,
+                energyRememberLast ? 1 : 0,
+                recycleRememberLast ? 1 : 0,
+                rememberModes ? 1 : 0,
+                headlightsOffInParking ? 1 : 0,
         });
        return cursor;
 
@@ -229,7 +258,10 @@ public class RestoreModeContentProvider extends ContentProvider {
                 if (v != null && !v.isEmpty()) { e.putString(key, v); n++; Log.i("$$$", "provider UPDATE " + key + "=" + v); }
             }
         }
-        for (String key : new String[]{"forcedEv", "disablePedestrianSound"}) {
+        for (String key : new String[]{
+                "forcedEv", "disablePedestrianSound", "rememberModes",
+                "driveRememberLast", "energyRememberLast", "recycleRememberLast",
+                "headlightsOffInParking"}) {
             if (values.containsKey(key)) {
                 Boolean v = values.getAsBoolean(key);
                 if (v != null) { e.putBoolean(key, v); n++; Log.i("$$$", "provider UPDATE " + key + "=" + v); }
@@ -237,5 +269,16 @@ public class RestoreModeContentProvider extends ContentProvider {
         }
         if (n > 0) e.apply();
         return n;
+    }
+
+    private boolean readRememberPreference(String key, String legacyKey,
+                                            boolean hasLegacyGlobal, boolean legacyGlobal) {
+        if (sharedPreferences.contains(key)) {
+            return sharedPreferences.getBoolean(key, true);
+        }
+        if (hasLegacyGlobal) return legacyGlobal;
+        return sharedPreferences.contains(legacyKey)
+                ? sharedPreferences.getBoolean(legacyKey, false)
+                : true;
     }
 }
