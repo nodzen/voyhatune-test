@@ -2,7 +2,6 @@
 // No view is added to ScreenActivity: the OEM PanelView/MusicBaseView remains the only renderer.
 Java.perform(function () {
     var TAG = "vt_instrumentcard";
-    var SPOTIFY = "com.spotify.music";
     var SETTINGS_KEY = "voyahtune_instrument_now_playing";
     var NOW_PLAYING = "ru.big.town.anative.NOW_PLAYING";
     var SOURCES = "ru.big.town.anative.NOW_PLAYING_SOURCES";
@@ -29,8 +28,9 @@ Java.perform(function () {
     var managerHooked = false;
     var nativeViewHooked = false;
     var refreshPending = false;
-    var spotifyAvailable = false;
-    var spotifySelected = false;
+    var bridgeAvailable = false;
+    var bridgeSelected = false;
+    var selectedMediaPackage = "";
     var enabled = true;
     var latestSnapshot = null;
     var nativeInfo = null;
@@ -40,7 +40,7 @@ Java.perform(function () {
     var Manager = null;
     var WECAR = null;
     var NO_MEDIA = null;
-    var spotifyControl = null;
+    var mediaControl = null;
 
     function log(message) { try { AndroidLog.i(TAG, message); } catch (e) {} }
     function warn(message) { try { AndroidLog.w(TAG, message); } catch (e) {} }
@@ -143,7 +143,10 @@ Java.perform(function () {
             if (cursor !== null) {
                 while (cursor.moveToNext()) {
                     var pkg = readColumn(cursor, "package", "");
-                    if (pkg) result.push({pkg: pkg, selected: readNumber(cursor, "selected", 0) === 1});
+                    if (pkg) result.push({
+                        pkg: pkg,
+                        selected: readNumber(cursor, "selected", 0) === 1
+                    });
                 }
             }
         } catch (e) { warn("source query failed: " + e); }
@@ -157,6 +160,23 @@ Java.perform(function () {
             var value = SettingsGlobal.getString(current.getContentResolver(), SETTINGS_KEY);
             enabled = value === null || text(value) !== "0";
         } catch (e) { enabled = true; }
+    }
+    function isBridgeSourcePackage(pkg) {
+        // Keep the car's own Radio/BT/USB implementations on their OEM media paths. Every other
+        // live MediaSession is an application source and can use the WECAR_FLOW bridge.
+        if (!pkg || pkg === "ru.big.town.anative" || pkg === "android") return false;
+        return pkg.indexOf("com.qinggan.") !== 0
+                && pkg.indexOf("com.pateo.") !== 0
+                && pkg.indexOf("tai.") !== 0
+                && pkg.indexOf("com.android.bluetooth") !== 0;
+    }
+    function findSelectedBridgeSource(snapshot, sources) {
+        for (var i = 0; i < sources.length; i++) {
+            if (sources[i].selected && isBridgeSourcePackage(sources[i].pkg)) return sources[i];
+        }
+        // The provider's snapshot is published from the selected controller. Use it as a
+        // short-lived fallback while the source-topology broadcast is still in flight.
+        return isBridgeSourcePackage(snapshot.pkg) ? {pkg: snapshot.pkg, selected: true} : null;
     }
     function setInfoValue(info, name, signature, value) {
         try {
@@ -174,22 +194,24 @@ Java.perform(function () {
         } catch (e) {
             try { info = QinMediaInfo.$new(); } catch (e2) { return null; }
         }
-        setInfoValue(info, "setName", "java.lang.String", snapshot.title || snapshot.app || "Spotify");
+        var pkg = snapshot.pkg || selectedMediaPackage;
+        setInfoValue(info, "setName", "java.lang.String", snapshot.title || snapshot.app || pkg || "Media");
         setInfoValue(info, "setArtist", "java.lang.String", snapshot.artist);
         setInfoValue(info, "setAlbumName", "java.lang.String", snapshot.album);
         setInfoValue(info, "setDuration", "long", Math.max(0, Number(snapshot.duration || 0)));
         setInfoValue(info, "setMediaId", "java.lang.String",
-                SPOTIFY + "|" + snapshot.title + "|" + snapshot.artist);
+                pkg + "|" + snapshot.title + "|" + snapshot.artist);
         setInfoValue(info, "setMediaType", "java.lang.String", "WECAR_FLOW");
-        setInfoValue(info, "setHostId", "java.lang.String", SPOTIFY);
-        setInfoValue(info, "setPath", "java.lang.String", SPOTIFY);
+        setInfoValue(info, "setHostId", "java.lang.String", pkg);
+        setInfoValue(info, "setPath", "java.lang.String", pkg);
         setInfoValue(info, "setCoverUrl", "java.lang.String",
-                snapshot.hasArt ? "content://ru.big.town.anative.nowplaying/art" : "");
+                snapshot.hasArt ? "content://ru.big.town.anative.nowplaying/art?rev="
+                        + Number(snapshot.updatedAt || 0) : "");
         setInfoValue(info, "setFav", "boolean", false);
         try {
             var extras = Bundle.$new();
             extras.putString.overload("java.lang.String", "java.lang.String").call(
-                    extras, JavaString.$new("package"), JavaString.$new(SPOTIFY));
+                    extras, JavaString.$new("package"), JavaString.$new(pkg));
             setInfoValue(info, "setExtBundle", "android.os.Bundle", extras);
         } catch (e3) {}
         return info;
@@ -209,13 +231,13 @@ Java.perform(function () {
         } catch (e) { warn("native media command " + command + " failed: " + e); }
     }
     function installControlProxy() {
-        if (spotifyControl !== null) return;
+        if (mediaControl !== null) return;
         try {
             var Control = Java.use("com.qinggan.app.mediaCentre.inter.IMediaControl");
             var SearchCallback = "android.support.v4.media.MediaBrowserCompat$SearchCallback";
             var CustomActionCallback = "android.support.v4.media.MediaBrowserCompat$CustomActionCallback";
             var ControlClass = Java.registerClass({
-                name: "ru.big.town.instrument.SpotifyMediaControl" + new Date().getTime(),
+                name: "ru.big.town.instrument.ThirdPartyMediaControl" + new Date().getTime(),
                 implements: [Control],
                 methods: {
                     addFav: {returnType: "void", argumentTypes: ["java.lang.String"], implementation: function () {}},
@@ -223,7 +245,7 @@ Java.perform(function () {
                     fastForward: {returnType: "void", argumentTypes: [], implementation: function () {}},
                     getMediaBrowserHelper: {returnType: "com.qinggan.media.helper.MediaBrowserHelper", argumentTypes: [], implementation: function () { return null; }},
                     getMediaType: {returnType: ENUM_NAME, argumentTypes: [], implementation: function () { return currentMediaEnum(); }},
-                    isConnected: {returnType: "boolean", argumentTypes: [], implementation: function () { return spotifyAvailable; }},
+                    isConnected: {returnType: "boolean", argumentTypes: [], implementation: function () { return bridgeAvailable; }},
                     isPlay: {returnType: "boolean", argumentTypes: [], implementation: function () { return !!latestSnapshot && Number(latestSnapshot.state) === 3; }},
                     pause: {returnType: "void", argumentTypes: [], implementation: function () { sendControl("pause"); }},
                     play: {returnType: "void", argumentTypes: [], implementation: function () { sendControl("play"); }},
@@ -243,7 +265,7 @@ Java.perform(function () {
                     unRegisterCallback: {returnType: "void", argumentTypes: ["com.qinggan.media.helper.MediaBrowserHelper$MediaListener"], implementation: function () {}}
                 }
             });
-            spotifyControl = ControlClass.$new();
+            mediaControl = ControlClass.$new();
             log("native IMediaControl proxy registered");
         } catch (e) { warn("IMediaControl proxy unavailable: " + e); }
     }
@@ -276,11 +298,13 @@ Java.perform(function () {
             });
         } catch (e) { warn("manager hook " + name + " unavailable: " + e); }
     }
-    function currentWecar() { return spotifyAvailable && spotifySelected; }
+    function currentWecar() {
+        return bridgeAvailable && bridgeSelected && selectedMediaPackage !== "";
+    }
     function addWecarToNativeViewList(list) {
         // The firmware exposes WECAR_FLOW only when its own WeChat Music option is enabled.
-        // Spotify is backed by that same native media contract, so make it visible to the OEM
-        // renderer only while Spotify is the selected real MediaSession source.
+        // Third-party MediaSession apps use that same native media contract, so make it visible
+        // to the OEM renderer only while one of those sources is selected.
         if (!currentWecar() || list === null || list === undefined) return;
         var mediaEnum = freshMediaEnum("WECAR_FLOW");
         if (mediaEnum === null) return;
@@ -330,7 +354,7 @@ Java.perform(function () {
                     ? {handled: true, value: nativeInfo} : null;
         });
         hookManagerMethod("getMediaControl", function (self, args) {
-            return isWecar(args[0]) && spotifyControl !== null ? {handled: true, value: spotifyControl} : null;
+            return isWecar(args[0]) && mediaControl !== null ? {handled: true, value: mediaControl} : null;
         });
         hookManagerMethod("isPlay", function (self, args) {
             return isWecar(args[0]) && currentWecar()
@@ -349,8 +373,8 @@ Java.perform(function () {
                 return {handled: true, value: undefined};
             });
         });
-        if (spotifyControl !== null) {
-            try { manager.addMediaControl(spotifyControl); } catch (e) {}
+        if (mediaControl !== null) {
+            try { manager.addMediaControl(mediaControl); } catch (e) {}
         }
         managerHooked = true;
         log("native MediaManager hooks installed");
@@ -372,10 +396,12 @@ Java.perform(function () {
         return false;
     }
     function pushNativeSnapshot() {
-        if (!managerHooked || !currentWecar() || latestSnapshot === null || !latestSnapshot.title) return;
+        if (!managerHooked || !currentWecar() || latestSnapshot === null
+                || latestSnapshot.pkg !== selectedMediaPackage) return;
         var snapshot = latestSnapshot;
-        var key = snapshot.title + "|" + snapshot.artist + "|" + snapshot.album + "|"
-                + snapshot.duration + "|" + snapshot.hasArt + "|" + snapshot.state;
+        var key = snapshot.pkg + "|" + snapshot.title + "|" + snapshot.artist + "|"
+                + snapshot.album + "|" + snapshot.duration + "|" + snapshot.hasArt + "|"
+                + snapshot.updatedAt + "|" + snapshot.state;
         if (key === lastNativeKey) return;
         var manager = managerInstance();
         if (manager === null) return;
@@ -395,7 +421,7 @@ Java.perform(function () {
         } catch (e2) { warn("native state callback failed: " + e2); return; }
         nativeInfo = info;
         lastNativeKey = key;
-        log("Spotify -> native WECAR_FLOW: " + snapshot.title);
+        log("MediaSession " + snapshot.pkg + " -> native WECAR_FLOW: " + snapshot.title);
     }
     function clearNativeSelection() {
         if (nativeInfo === null || !ensureMediaClasses()) return;
@@ -414,22 +440,20 @@ Java.perform(function () {
         refreshConfig();
         var snapshot = readSnapshot();
         var sources = readSources();
-        var found = snapshot.pkg === SPOTIFY;
-        var selected = snapshot.pkg === SPOTIFY;
+        var selectedSource = findSelectedBridgeSource(snapshot, sources);
+        var found = false;
         for (var i = 0; i < sources.length; i++) {
-            if (sources[i].pkg === SPOTIFY) {
-                found = true;
-                selected = selected || sources[i].selected;
-            }
+            if (isBridgeSourcePackage(sources[i].pkg)) { found = true; break; }
         }
-        var wasSelected = spotifySelected;
+        var wasSelected = bridgeSelected;
         latestSnapshot = snapshot;
-        spotifyAvailable = enabled && found;
-        spotifySelected = spotifyAvailable && selected;
-        if (!spotifySelected && wasSelected) clearNativeSelection();
+        bridgeAvailable = enabled && (found || selectedSource !== null);
+        bridgeSelected = bridgeAvailable && selectedSource !== null;
+        selectedMediaPackage = bridgeSelected ? selectedSource.pkg : "";
+        if (!bridgeSelected && wasSelected) clearNativeSelection();
         installManagerHooks();
         installNativeViewSupport();
-        if (spotifySelected) pushNativeSnapshot();
+        if (bridgeSelected) pushNativeSnapshot();
     }
     function scheduleRefresh() {
         if (refreshPending) return;
