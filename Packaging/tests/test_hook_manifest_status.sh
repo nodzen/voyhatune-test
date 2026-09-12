@@ -70,6 +70,10 @@ require "$LOADER" "*'stored=true'*)"
 require "$LOADER" 'HOOK_STATUS_PROVIDER_MAX_ATTEMPTS=3'
 require "$LOADER" 'HOOK_STATUS_URI=content://ru.big.town.restoremode.restoremodecontentprovider'
 require "$LOADER" 'HOOK_STATUS_METHOD=publishHookStatusV1'
+require "$LOADER" "grep -F -x -c '  \"schemaVersion\": 1,' \"\$HOOK_MANIFEST\""
+forbid "$LOADER" "grep -F -x -c '  \\\"schemaVersion\\\": 1,' \"\$HOOK_MANIFEST\""
+require "$LOADER" "grep -F -c '{\"id\":' \"\$HOOK_MANIFEST\""
+forbid "$LOADER" "grep -F -c '{\\\"id\\\":' \"\$HOOK_MANIFEST\""
 require "$PROVIDER" 'Binder.getCallingUid() != 0'
 require "$PROVIDER" '.putString(HookStatusContract.PAYLOAD_KEY, arg)'
 require "$PROVIDER" '.commit();'

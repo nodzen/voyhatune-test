@@ -1384,9 +1384,9 @@ INSTRUMENT_CARD_STATE=unknown
 
 MANIFEST_SHA=$(sha256_path "$HOOK_MANIFEST" 2>/dev/null) || MANIFEST_SHA=unavailable
 HOOK_MANIFEST_STRUCTURE=ok
-[ "$(grep -F -x -c '  \"schemaVersion\": 1,' "$HOOK_MANIFEST" 2>/dev/null)" = 1 ] \
+[ "$(grep -F -x -c '  "schemaVersion": 1,' "$HOOK_MANIFEST" 2>/dev/null)" = 1 ] \
     || HOOK_MANIFEST_STRUCTURE=invalid
-[ "$(grep -F -c '{\"id\":' "$HOOK_MANIFEST" 2>/dev/null)" = 8 ] \
+[ "$(grep -F -c '{"id":' "$HOOK_MANIFEST" 2>/dev/null)" = 8 ] \
     || HOOK_MANIFEST_STRUCTURE=invalid
 
 VD_INTEGRITY=$(manifest_script_integrity vd-bypass system_server vd_bypass.js "$VD")
