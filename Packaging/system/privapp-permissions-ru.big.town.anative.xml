@@ -20,6 +20,7 @@
         <permission name="android.permission.DEVICE_POWER"/>
         <permission name="android.permission.MANAGE_APP_OPS_MODES"/>
         <permission name="android.permission.FORCE_STOP_PACKAGES"/>
+        <permission name="android.permission.CHANGE_COMPONENT_ENABLED_STATE"/>
         <permission name="android.permission.INJECT_EVENTS"/>
         <permission name="android.permission.ADD_TRUSTED_DISPLAY"/>
         <permission name="android.permission.MANAGE_USB"/>

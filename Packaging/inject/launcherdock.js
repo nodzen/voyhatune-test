@@ -1,28 +1,28 @@
-// launcherdock.js — переопределение водительского дока и стабилизация доков обоих экранов Open Voyah.
+// launcherdock.js — переопределение кнопок «Звонок»/«Радио» и стабилизация доков обоих экранов Open Voyah.
 // На ОД-прошивках это NavigationBarMain + NavigationBarSecond, на ПИ — общий NavigationBar с mScreenId.
 //
 // Механика: хук навигационного бара и списка приложений штатного лаунчера:
 //   • КОНФИГ — живьём из Settings.Global: voyahtune_dock1/2
-//     (= packageName; "none" = слот не переопределён). Опц. одноимённые *Dpi ключи.
+//     (= packageName кнопок «Звонок»/«Радио»; "none" = штатная кнопка). Опц. одноимённые *Dpi ключи.
 //     Пишет их Native (SetModesReceiverDynamic.mirrorDock), читаем как action() в steeringwheelkeys.js.
 //   • ИКОНКА слота — через view.setBackground(drawable), НЕ setImageDrawable: картинка слота живёт в
 //     background у NoToggleRadioButton. Оригинал бэкапим один раз (getBackground), кастом строим из
 //     pm.getApplicationIcon → Bitmap → 50x50 → BitmapDrawable + Java.retain. Всё на main-треде + invalidate.
 //     Хук updateTheme переустанавливает иконки после каждой перекраски темы (иначе фон сбрасывается).
-//   • КЛИК — на водительском onClick сравнивает view.getId() с mScreenUpItemView1/2. При совпадении и
+//   • КЛИК — на водительском onClick сравнивает view.getId() с mScreenUpItemView1/2 (штатно «Звонок»/«Радио»). При совпадении и
 //     если pkg установлен — делегируем Native. Пассажирские Air/Seat остаются полностью штатными.
 //     Native запускает обычную задачу целевого пакета на display 0, а vd_bypass ужимает её
 //     WindowManager-рамку. VD — только для split-пресетов.
-//   • ДОЛГИЙ ТАП по слоту — если слоту назначен сплит (voyahtune_dockN HasSplit=="1"), шлём Native
-//     broadcast OPEN_DOCK_SPLIT (slot) → Native читает детали сплита из Settings.Global и стартует его на
-//     VD. Если сплит не назначен — слушатель возвращает false (штатное долгое поведение лаунчера). Назначение
-//     сплита слоту делается в VoyahTune («Приложения и разделение экрана» → Системный док).
+//   • ДОЛГИЙ ТАП по «Звонку»/«Радио» — если назначено действие (voyahtune_dockNLong), шлём Native broadcast
+//     OPEN_DOCK_ACTION. Для старых конфигов сохраняется fallback через OPEN_DOCK_SPLIT и HasSplit.
+//     Если действие не назначено — слушатель возвращает false (штатное долгое поведение лаунчера).
 //   • ПОДСВЕТКА — updateSelectedApp: reverse-mapping (наш pkg слота → штатный pkg, закреплённый за слотом),
 //     чтобы родной лаунчер чекнул правильную кнопку. Косметика, не блокер.
 //   • RELOAD — приёмник ru.big.town.anative.DOCK_RELOAD перечитывает конфиг и перерисовывает иконки
 //     (иконки рисуются проактивно; клик читает конфиг живьём, ему reload не нужен).
 //   • ALL APPS — в списки обоих экранов добавляются все launchable user-apps, которых штатный
-//     лаунчер не показывает. PackageManager scan кэшируется до PACKAGE_ADDED/REMOVED/CHANGED;
+//     лаунчер не показывает; замороженные пакеты из blacklist убираются из списка через
+//     voyahtune_frozen_apps. PackageManager scan кэшируется до PACKAGE_ADDED/REMOVED/CHANGED;
 //     package-broadcast через штатный AllAppDataManager.reload() пересобирает оба списка и обновляет открытые UI
 //     без polling. Клик идёт через OEM AppLauncher с mScreenId владельца All Apps (и проверочным fallback по view),
 //     поэтому top activity остаётся целевым package на соответствующем физическом display.
@@ -30,9 +30,10 @@
 //     показать navigation bar нужного физического экрана. Во время OEM transfer короткий deadline-guard
 //     не даёт onMoveStart удалить оба бара до того, как foreground-кэш обновится на destination.
 Java.perform(function () {
-    // Слот → штатный pkg, который родной лаунчер умеет подсвечивать (oversea, главный экран).
+    // Кнопка → штатный pkg, который родной лаунчер умеет подсвечивать (oversea, главный экран).
     // ВНИМАНИЕ: значения версионно-хрупкие, подтвердить на живой голове H97C.
     var STOCK_SLOT_PKG = { 1: "com.qinggan.bluetoothphone", 2: "com.qinggan.app.music" };
+    var STOCK_SLOT_LABEL = { 1: "Звонок", 2: "Радио" };
     var NAV_MAIN   = "com.qinggan.launcher.navigation.NavigationBarMain"; // класс навбара в ОД-прошивках
     var NAV_SECOND = "com.qinggan.launcher.navigation.NavigationBarSecond";
     var RELOAD_ACT = "ru.big.town.anative.DOCK_RELOAD";
@@ -50,6 +51,15 @@ Java.perform(function () {
 
     var TAG = "vt_launcherdock";
     var Log = Java.use("android.util.Log");
+    // Live OD source of truth for the foreground package. updateSelectedApp() is posted to the
+    // launcher UI queue and may still contain the previous app when a later show/dismiss arrives.
+    // Keep both classes optional so PI/other firmware can fall back to the event cache.
+    var LauncherAppUtils = null;
+    try { LauncherAppUtils = Java.use("com.qinggan.launcher.base.utils.AppUtils"); }
+    catch (e) { Log.w(TAG, "[dock] AppUtils unavailable; foreground cache fallback: " + e); }
+    var AccountConstantUtil = null;
+    try { AccountConstantUtil = Java.use("com.qinggan.account.AccountConstantUtil"); }
+    catch (e) { Log.w(TAG, "[dock] AccountConstantUtil unavailable; using | separator: " + e); }
 
     // На ОД классы экранов раздельные, на ПИ общий класс различается полем mScreenId.
     var SHARED_NAV = false;
@@ -164,16 +174,19 @@ Java.perform(function () {
     }
 
     // Кэш иконочного конфига водительского дока (для проактивной перерисовки).
-    var cache = { dock1: "none", dock2: "none" };
+    var cache = { dock1: "none", dock2: "none", fullscreen: {}, frozenApps: {} };
     // Бэкап штатных фонов слотов: originalBg["<screenId>:<viewName>"] = Drawable (один раз на экран+поле,
     // чтобы Drawable одного экрана никогда не попал во вьюху другого — см. updateIcons).
     var originalBg = {};
     // Удержанные Drawable (иначе GC уберёт background).
     var retained = [];
+    // Иконка выбранного приложения не меняется между bounded startup-проходами. Повторный decode
+    // Bitmap через Java bridge был заметен как микрофриз при запуске лаунчера.
+    var appDrawableCache = {};
     var MAX_RETAINED_DRAWABLES = 64;
     // Последний нажатый слот (для корректной подсветки нашего VD-хоста в updateSelectedApp).
     var lastSlot = { 0: 0, 1: 0 };
-    // viewId слота дока → номер слота (1/2). Заполняется в updateIcons, читается в долгом тапе слота
+    // viewId кнопки → номер кнопки (1=Звонок, 2=Радио). Заполняется в updateIcons, читается в долгом тапе
     // (устойчиво к нескольким инстансам навбара — ключ по id вью, а не по последнему инстансу).
     var slotByViewId = {};
     // Приложение переднего плана ПО ЭКРАНАМ. Один общий кэш позволял пассажирскому бару перетирать
@@ -188,6 +201,7 @@ Java.perform(function () {
     };
     var moveDockGeneration = 0;
     var schedulePhysicalDockRecovery = null;
+    var physicalDockRecoveryTimer = null;
 
     function activeMoveDockGuard() {
         if (cfg("dockpin") === "0" || cfg("freeform") === "0") return null;
@@ -218,6 +232,66 @@ Java.perform(function () {
         return false;
     }
 
+    function fullscreenPackageSet(csv) {
+        var out = {};
+        if (csv && csv !== "none") {
+            var packages = csv.split(",");
+            for (var i = 0; i < packages.length; i++) {
+                var pkg = cleanJavaString(packages[i]);
+                if (pkg) out[pkg] = true;
+            }
+        }
+        return out;
+    }
+
+    // Резервный UI-гейт All Apps. Эти пакеты нельзя заморозить даже при повреждённой записи
+    // Settings.Global: радио, Bluetooth-телефон и базовые автомобильные контуры должны оставаться
+    // доступными и не затрагиваться чисткой.
+    var NEVER_FREEZE_LAUNCHER = {
+        "com.qinggan.app.music": true,
+        "com.qinggan.app.radio": true,
+        "com.pateo.rdsapp": true,
+        "com.qinggan.tuner.service": true,
+        "com.qinggan.media": true,
+        "com.qinggan.audiopolicy.service": true,
+        "com.qinggan.bluetoothphone": true,
+        "com.qinggan.app.launcher": true,
+        "com.qinggan.app.vehicle": true,
+        "com.qinggan.app.vehiclesetting": true,
+        "com.qinggan.app.setting": true,
+        "com.qinggan.systemservice": true,
+        "com.qinggan.systemui": true,
+        "com.qinggan.canbus.service": true,
+        "com.qinggan.carsignal.service": true,
+        "com.qinggan.QGBus": true,
+        "com.qinggan.powermanager": true,
+        "com.qinggan.lastmemory.service": true,
+        "com.qinggan.app.thirdscreen": true,
+        "com.qinggan.app.islandapp": true
+    };
+
+    function frozenLauncherPackageSet(csv) {
+        var out = {};
+        if (csv && csv !== "none") {
+            var packages = csv.split(",");
+            for (var i = 0; i < packages.length; i++) {
+                var pkg = cleanJavaString(packages[i]);
+                if (pkg && !NEVER_FREEZE_LAUNCHER[pkg]) out[pkg] = true;
+            }
+        }
+        return out;
+    }
+
+    function isFrozenLauncherPackage(pkg) {
+        pkg = cleanJavaString(pkg);
+        return !!pkg && NEVER_FREEZE_LAUNCHER[pkg] !== true && cache.frozenApps[pkg] === true;
+    }
+
+    function isUserFullscreen(pkg) {
+        pkg = cleanJavaString(pkg);
+        return !!pkg && cache.fullscreen[pkg] === true;
+    }
+
     // Наши активити, которые САМИ отступают на полосу родного дока (их контент туда не залезает).
     // Под ними док обязан остаться — иначе получается пустая чёрная полоса. Остальные наши экраны
     // отступа не делают, им док прятать нужно, иначе он накроет их левый край.
@@ -236,6 +310,7 @@ Java.perform(function () {
         act = cleanJavaString(act);
         if (cfg("dockpin") === "0" || cfg("freeform") === "0") return false;
         if (!pkg) return false;                                  // неизвестно → не мешаем штатному
+        if (isUserFullscreen(pkg)) return false;                  // пользователь явно выбрал полный экран
         if (pkg.indexOf("ru.big.town") === 0) return ourInsetActivity(act);
         return !isStockPkg(pkg);
     }
@@ -257,6 +332,7 @@ Java.perform(function () {
             // elapsedRealtime снова начинается с нуля. Штатный guard держится 5 секунд.
             if (isNaN(deadline) || remaining <= 0 || remaining > 10000) return null;
             var pkg = raw.substring(sep + 1);
+            if (isUserFullscreen(pkg)) return null;
             // Guard не должен удержать док поверх полноэкранного штатного приложения, которому
             // штатный dismiss как раз нужен. Для наших двух inset-экранов activity заранее известна.
             var keep = (pkg === OUR_PKG || pkg === RESTORE_PKG)
@@ -279,10 +355,62 @@ Java.perform(function () {
         } catch (e) { return "none"; }
     }
 
+    function parseTopActivity(top) {
+        top = cleanJavaString(top);
+        if (!top) return { pkg: "", act: "" };
+        var separator = "|";
+        try {
+            if (AccountConstantUtil !== null) {
+                separator = cleanJavaString(AccountConstantUtil.SEPARATOR.value) || "|";
+            }
+        } catch (ignored) {}
+        var separatorAt = top.indexOf(separator);
+        // The inspected H97C launcher uses '|'. Preserve recovery if an optional account helper
+        // reports a different/invalid value on another firmware variant.
+        if (separatorAt < 0 && separator !== "|") separatorAt = top.indexOf("|");
+        if (separatorAt < 0) return { pkg: top, act: "" };
+        return {
+            pkg: cleanJavaString(top.substring(0, separatorAt)),
+            act: cleanJavaString(top.substring(separatorAt + separator.length))
+        };
+    }
+
+    // Returns a live top when the OEM helper is available. A non-empty live answer is authoritative,
+    // including when it says Launcher/Home: a stale fullscreen cache must not keep the dock hidden.
+    function topActivityForScreen(screenId, context) {
+        var cached = (screenId === 0 || screenId === 1)
+                ? fgByScreen[screenId] : { pkg: "", act: "" };
+        if (LauncherAppUtils === null || (screenId !== 0 && screenId !== 1)) {
+            return { pkg: cached.pkg, act: cached.act, live: false };
+        }
+        try {
+            var parsed = parseTopActivity(LauncherAppUtils.getTopAppInfo(
+                    context || ctx(), screenId, 4));
+            if (!parsed.pkg) return { pkg: cached.pkg, act: cached.act, live: false };
+            fgByScreen[screenId].pkg = parsed.pkg;
+            fgByScreen[screenId].act = parsed.act;
+            return { pkg: parsed.pkg, act: parsed.act, live: true };
+        } catch (e) {
+            if (!topActivityForScreen._warned) {
+                topActivityForScreen._warned = true;
+                Log.w(TAG, "[dock] live top lookup failed; using event cache: " + e);
+            }
+            return { pkg: cached.pkg, act: cached.act, live: false };
+        }
+    }
+
     function refreshCache() {
-        cache.dock1 = cfg("dock1");
-        cache.dock2 = cfg("dock2");
-        Log.i(TAG, "[dock] cache: driver=" + cache.dock1 + "/" + cache.dock2);
+        var nextDock1 = cfg("dock1");
+        var nextDock2 = cfg("dock2");
+        if (cache.dock1 !== nextDock1 && cache.dock1 !== "none") delete appDrawableCache[cache.dock1];
+        if (cache.dock2 !== nextDock2 && cache.dock2 !== "none") delete appDrawableCache[cache.dock2];
+        cache.dock1 = nextDock1;
+        cache.dock2 = nextDock2;
+        cache.fullscreen = fullscreenPackageSet(cfg("fullscreen_apps"));
+        cache.frozenApps = frozenLauncherPackageSet(cfg("frozen_apps"));
+        Log.i(TAG, "[dock] cache: driver=" + cache.dock1 + "/" + cache.dock2
+                + " fullscreen=" + Object.keys(cache.fullscreen).join(",")
+                + " frozenApps=" + Object.keys(cache.frozenApps).length);
     }
 
     function dockPackage(screenId, slot, live) {
@@ -318,6 +446,7 @@ Java.perform(function () {
 
     // Drawable иконки приложения: pm.getApplicationIcon → рисуем на Bitmap → масштаб 50x50 → BitmapDrawable.
     function getAppDrawable(pkg) {
+        if (appDrawableCache[pkg]) return appDrawableCache[pkg];
         try {
             var pm = ctx().getPackageManager();
             var ai = pm.getApplicationInfo(pkg, 0);
@@ -330,7 +459,9 @@ Java.perform(function () {
             var d = BitmapDrawable.$new(ctx().getResources(), scaled);
             d.setGravity(17);              // Gravity.CENTER
             d.setBounds(0, 0, 50, 50);
-            return retainDrawable(d);
+            var retainedDrawable = retainDrawable(d);
+            appDrawableCache[pkg] = retainedDrawable;
+            return retainedDrawable;
         } catch (e) {
             Log.e(TAG, "[dock] getAppDrawable err " + pkg + ": " + e);
             return null;
@@ -372,10 +503,9 @@ Java.perform(function () {
         return menuLC;
     }
 
-    // Долгий тап по слоту дока → открыть назначенный слоту СПЛИТ (делегируем Native: он читает детали
-    // сплита из Settings.Global и стартует SplitHostActivity на VD). Слушатель один на оба слота; слот
-    // определяем по view.getId() через slotByViewId. Если сплит слоту не назначен (voyahtune_dockN
-    // HasSplit != "1") — возвращаем false, чтобы штатное долгое поведение лаунчера не ломать.
+    // Долгий тап по кнопке «Звонок»/«Радио» → выполнить назначенное действие. Слушатель один на обе кнопки;
+    // кнопку определяем по view.getId() через slotByViewId. Если action не назначен, оставляем старый split
+    // fallback для конфигов до 3.8.4 и возвращаем false для полностью штатного слота.
     var slotLC = null;
     function getSlotLongClick() {
         if (slotLC !== null) return slotLC;
@@ -390,12 +520,19 @@ Java.perform(function () {
                         implementation: function (view) {
                             try {
                                 var slot = slotByViewId["" + view.getId()] || 0;
+                                var action = slot ? cfg("dock" + slot + "Long") : "none";
                                 var has = slot ? cfg("dock" + slot + "HasSplit") : "?";
-                                try { Java.use("android.util.Log").i("voyahdock", "slot long-press id=" + view.getId() + " slot=" + slot + " hasSplit=" + has); } catch (ee) {}
+                                try { Java.use("android.util.Log").i("voyahdock", "button long-press id=" + view.getId() + " button=" + (STOCK_SLOT_LABEL[slot] || slot) + " action=" + action + " hasSplit=" + has); } catch (ee) {}
                                 if (slot === 0) return false;
-                                if (has !== "1") return false;  // сплит не назначен → штатно
-                                openDockSplit(slot);
-                                return true;
+                                if (action && action !== "none") {
+                                    openDockAction(slot, action);
+                                    return true;
+                                }
+                                if (has === "1") {              // legacy split-only config
+                                    openDockSplit(slot);
+                                    return true;
+                                }
+                                return false;                     // штатное долгое поведение
                             } catch (e) {
                                 try { Log.e(TAG, "slot long-press err: " + e); } catch (ee) {}
                                 return false;
@@ -425,6 +562,22 @@ Java.perform(function () {
         }
     }
 
+    // Универсальное действие назначенного слоту долгого нажатия. Native проверяет точное значение
+    // против защищённого Settings.Global snapshot перед исполнением.
+    function openDockAction(slot, action) {
+        try {
+            var i = Intent.$new("ru.big.town.anative.OPEN_DOCK_ACTION");
+            i.setClassName(OUR_PKG, "ru.big.town.anative.SetModesReceiverDynamic");
+            i.putExtra.overload('java.lang.String', 'int').call(i, "slot", slot);
+            i.putExtra.overload('java.lang.String', 'java.lang.String').call(i, "action", "" + action);
+            i.addFlags(0x00000020);
+            ctx().sendBroadcast(i);
+            Log.i(TAG, "[dock] OPEN_DOCK_ACTION slot=" + slot + " action=" + action);
+        } catch (e) {
+            Log.e(TAG, "[dock] openDockAction err: " + e);
+        }
+    }
+
     function setDockViewVisibility(view, visibility, label) {
         if (!view) return;
         try { view.setVisibility(visibility); }
@@ -441,9 +594,54 @@ Java.perform(function () {
         } catch (e) { Log.e(TAG, "[dock] height " + label + " err: " + e); }
     }
 
+    // OEM dismiss() only starts a 100-ms x=-width animation and removes the Window from its end
+    // callback. Another launcher lifecycle event can end/reuse that animator before removal. Cancelling
+    // it with the OEM listener still attached invokes onAnimationEnd(), so a following explicit remove
+    // can remove the same root twice and destabilize Launcher. Silence/cancel the animator first, move
+    // the Window off-screen synchronously, then use ordinary removeView(). Keeping the Window attached
+    // would leave its navigation-bar inset active and constrain fullscreen apps to the old dock width.
+    // WindowManagerGlobal clears the View parent as removal starts, so repeated hides are idempotent;
+    // OEM show() can safely add the root again when Home becomes foreground.
+    function forceHideDockController(controller, label) {
+        if (controller === null) return false;
+        try {
+            var animator = runtimeObject(dockField(controller, "mMoveWindowAnimator"));
+            if (animator !== null && animator.isStarted()) {
+                animator.removeAllListeners();
+                animator.removeAllUpdateListeners();
+                animator.cancel();
+            }
+        } catch (e) { Log.w(TAG, "[dock] cancel dismiss animator " + label + ": " + e); }
+        try {
+            var root = runtimeObject(dockField(controller, "mRootView"));
+            var windowManager = runtimeObject(dockField(controller, "mWindowManager"));
+            var lp = runtimeObject(dockField(controller, "mLp"));
+            if (root === null || lp === null) return false;
+            lp.x.value = -Math.abs(Number(lp.width.value));
+            var attached = root.getParent() !== null;
+            if (attached) {
+                if (windowManager === null) return false;
+                windowManager.updateViewLayout(root, lp);
+                windowManager.removeView(root);
+            }
+            Log.i("voyahdock", "force hidden/detached " + label + " attached=" + attached);
+            return true;
+        } catch (e) {
+            Log.e(TAG, "[dock] force hide " + label + " failed: " + e);
+            return false;
+        }
+    }
+
     function applyScreenLiftDock(instance, type, fallbackScreen) {
         var sid = managedScreenId(instance, fallbackScreen);
         if (sid !== 0) return; // passenger compact remains completely OEM-controlled (Home only)
+        if (isUserFullscreen(topActivityForScreen(0, null).pkg)) {
+            // Bounded boot/reload icon passes must never expose children of the detached fullscreen dock.
+            var hiddenViews = dockViews(instance);
+            setDockViewVisibility(hiddenViews.up, 8, "fullscreen screenUp");
+            setDockViewVisibility(hiddenViews.down, 8, "fullscreen screenDown");
+            return;
+        }
         var compact = type === 1;
         var views = dockViews(instance);
         // На водительском OD temperature-content лежит поверх штатного slot3 (Air). В compact
@@ -521,7 +719,7 @@ Java.perform(function () {
                     if (lc) { av.setLongClickable(true); av.setOnLongClickListener(lc); }
                 }
             } catch (e) { Log.e(TAG, "[dock] menu long-press attach err: " + e); }
-            // Долгий тап по слотам 1/2 → открыть назначенный сплит. Регистрируем viewId→slot и вешаем
+            // Долгий тап по кнопкам «Звонок»/«Радио» → выполнить назначенное действие. Регистрируем viewId→slot и вешаем
             // слушатель (идемпотентно, переживает перекраску темы, как и меню-лонгтап выше).
             try {
                 var sv1 = views.slot1;
@@ -540,15 +738,38 @@ Java.perform(function () {
             try {
                 Java.choose(entry.name, {
                     onMatch: function (inst) {
+                        // Java.choose wrappers are only guaranteed for the callback lifetime.
+                        // The actual view mutation is posted to the launcher looper, so retain the
+                        // controller until that runnable finishes instead of occasionally using a
+                        // stale Frida handle during the bounded cold-boot passes.
+                        var retainedNavbar = Java.retain(inst);
                         Java.scheduleOnMainThread(function () {
-                            try { updateIcons(inst, entry.screen); }
+                            try { updateIcons(retainedNavbar, entry.screen); }
                             catch (e) { Log.e(TAG, "[dock] updateAll err: " + e); }
+                            finally {
+                                try { retainedNavbar.$dispose(); }
+                                catch (ignored) {}
+                            }
                         });
                     },
                     onComplete: function () {}
                 });
             } catch (e) { Log.e(TAG, "[dock] choose " + entry.name + " err: " + e); }
         });
+        // If Launcher itself restarted while a third-party task remained top, OEM firstShow() can
+        // call INavigationBarController.show() without a new TOP_ACTIVITY_CHANGED broadcast. The
+        // concrete controller hook is not reliable for that invoke-interface path, so every bounded
+        // startup/lift/reload pass also reconciles the live LauncherModel after its UI queue settles.
+        if (schedulePhysicalDockRecovery !== null) {
+            try {
+                Java.choose("com.qinggan.app.launcher.LauncherModel", {
+                    onMatch: function (inst) {
+                        schedulePhysicalDockRecovery(inst, "navbar pass");
+                    },
+                    onComplete: function () {}
+                });
+            } catch (e) { Log.e(TAG, "[dock] bounded model recovery err: " + e); }
+        }
     }
 
     // Freeform-запуск приложения из слота дока делегируем Native: Native закроет активный VD-сплит и
@@ -563,6 +784,26 @@ Java.perform(function () {
             ctx().sendBroadcast(i);
             Log.i(TAG, "[dock] OPEN_FREEFORM -> " + pkg + " display=" + displayId);
         } catch (e) { Log.e(TAG, "[dock] launchFreeform err: " + e); }
+    }
+
+    // Fullscreen launch must normalize an already existing mode-5 task before resume. Native applies
+    // Android 11 ActivityOptions windowingMode=FULLSCREEN and independently validates the persisted
+    // allowlist, so this exported launcher bridge cannot start an arbitrary package.
+    function launchFullscreen(pkg, displayId) {
+        try {
+            if (displayId !== 0 && displayId !== 1) return false;
+            var i = Intent.$new("ru.big.town.anative.OPEN_FULLSCREEN");
+            i.setClassName(OUR_PKG, "ru.big.town.anative.SetModesReceiverDynamic");
+            i.putExtra.overload('java.lang.String', 'java.lang.String').call(i, "pkg", "" + pkg);
+            i.putExtra.overload('java.lang.String', 'int').call(i, "display", displayId);
+            i.addFlags(0x00000020);
+            ctx().sendBroadcast(i);
+            Log.i(TAG, "[dock] OPEN_FULLSCREEN -> " + pkg + " display=" + displayId);
+            return true;
+        } catch (e) {
+            Log.e(TAG, "[dock] launchFullscreen err: " + e);
+            return false;
+        }
     }
 
     // Штатный All Apps фильтрует почти все сторонние APK. Вариант voboost решает это хуком
@@ -614,13 +855,80 @@ Java.perform(function () {
             Log.i(TAG, "[allapps] ABI=" + allAppsAbi.bean);
             var AppLauncher = Java.use("com.qinggan.launcher.base.utils.AppLauncher");
             var JavaString = Java.use("java.lang.String");
+            var JavaSystem = Java.use("java.lang.System");
             var pm = ctx().getPackageManager();
             var installedSnapshot = null;
             var iconCache = {};
+            var labelCache = {};
             var packageRefreshTimer = null;
+            // The adapter bind hook is unavoidable for synthetic entries, but it must not do a
+            // reflection + Java.cast for every stock tile while the user scrolls. The list identity
+            // tells us where the synthetic suffix starts; this map is populated only when getAllApps
+            // builds/refreshes the list.
+            var syntheticStartByList = {};
+            // RecyclerView continuously rebinds the same holders while the user swipes. Keep the
+            // backing list lookup on the Java side only once per adapter generation; otherwise even
+            // a stock tile crosses the Frida bridge for field lookup + identityHashCode every frame.
+            // The cache is dropped whenever getAllApps rebuilds either OEM list.
+            var adapterMetadataByIdentity = {};
+            // The OEM adapter recreates many inexpensive but numerous tile holders during a fast
+            // swipe. A single bounded cache on the driver All Apps RecyclerView retains the small
+            // 21–32 item list and removes those synchronous inflations from the gesture path.
+            var ALL_APPS_VIEW_CACHE_SIZE = 32;
+            var allAppsRecyclerCacheTuned = false;
+            var allAppsRecyclerCacheAttempts = 0;
+            var AllAppsRecyclerView = null;
+            try { AllAppsRecyclerView = Java.use("androidx.recyclerview.widget.RecyclerView"); }
+            catch (androidxMissing) {
+                try { AllAppsRecyclerView = Java.use("android.support.v7.widget.RecyclerView"); }
+                catch (supportMissing) {}
+            }
             var FLAG_SYSTEM = 0x00000001;
             var SYNTHETIC_PREFIX = "__voyahtune_allapps__:";
             var resourceTemplate = null;
+
+            function packageFromIntent(intent) {
+                if (intent === null) return "";
+                try {
+                    var component = intent.getComponent();
+                    if (component !== null) return cleanJavaString(component.getPackageName());
+                } catch (ignored) {}
+                try {
+                    var explicitPackage = cleanJavaString(intent.getPackage());
+                    if (explicitPackage) return explicitPackage;
+                } catch (ignored) {}
+                try {
+                    var resolved = pm.resolveActivity(intent, 0);
+                    if (resolved !== null && resolved.activityInfo.value !== null) {
+                        return cleanJavaString(resolved.activityInfo.value.packageName.value);
+                    }
+                } catch (ignored) {}
+                return "";
+            }
+
+            // Covers both synthetic third-party entries and stock OEM entries that happen to expose an
+            // allowlisted package. Without this gate, All Apps bypasses Native ActivityOptions and can
+            // simply raise a reused dock-width freeform task.
+            try {
+                var startAppIntent = AppLauncher.startApp.overload(
+                        'android.content.Context', 'android.content.Intent', 'int');
+                startAppIntent.implementation = function (context, intent, screenIdArg) {
+                    var screenId = Number(screenIdArg);
+                    var pkg = packageFromIntent(intent);
+                    if (isUserFullscreen(pkg) && launchFullscreen(pkg, screenId)) return;
+                    return startAppIntent.call(this, context, intent, screenIdArg);
+                };
+                var startAppComponent = AppLauncher.startApp.overload(
+                        'android.content.Context', 'java.lang.String', 'java.lang.String', 'int');
+                startAppComponent.implementation = function (context, pkgArg, classArg, screenIdArg) {
+                    var pkg = cleanJavaString(pkgArg);
+                    var screenId = Number(screenIdArg);
+                    if (isUserFullscreen(pkg) && launchFullscreen(pkg, screenId)) return;
+                    return startAppComponent.call(this,
+                            context, pkgArg, classArg, screenIdArg);
+                };
+                Log.i(TAG, "[allapps] fullscreen ActivityOptions routing installed");
+            } catch (e) { Log.e(TAG, "[allapps] fullscreen launch routing unavailable: " + e); }
 
             function launchAllApp(pkg, screenId) {
                 try {
@@ -628,6 +936,7 @@ Java.perform(function () {
                         Log.e(TAG, "[allapps] reject non-physical display=" + screenId + " for " + pkg);
                         return false;
                     }
+                    if (isUserFullscreen(pkg)) return launchFullscreen(pkg, screenId);
                     var intent = pm.getLaunchIntentForPackage(pkg);
                     if (intent === null) return false;
                     intent.addFlags(0x10000000); // FLAG_ACTIVITY_NEW_TASK
@@ -665,6 +974,7 @@ Java.perform(function () {
                         var pkg = "" + ai.packageName.value;
                         var flags = Number(ai.flags.value);
                         if ((flags & FLAG_SYSTEM) !== 0 || pkg === "com.qinggan.app.launcher") continue;
+                        if (isFrozenLauncherPackage(pkg)) continue;
                         if (pm.getLaunchIntentForPackage(pkg) === null) continue;
                         result.push(pkg);
                     } catch (ignored) {}
@@ -729,10 +1039,90 @@ Java.perform(function () {
                 }
             }
 
-            function beanAt(adapter, position) {
-                var beans = fieldValue(adapter, "mAppBeans");
+            // Blacklist работает и для штатных OEM-записей, а не только для synthetic user-apps.
+            // Идём с конца, чтобы удаление не сдвигало ещё не обработанные элементы.
+            function filterFrozenApps(list) {
+                var removed = 0;
+                for (var i = list.size() - 1; i >= 0; i--) {
+                    try {
+                        var bean = Java.cast(list.get(i), AppBean);
+                        if (isFrozenLauncherPackage(bean.getPackageName())) {
+                            list.remove(i);
+                            removed++;
+                        }
+                    } catch (ignored) {}
+                }
+                if (removed > 0) Log.i(TAG, "[allapps] frozen OEM/user entries=" + removed);
+            }
+
+            function adapterBeans(adapter) {
+                try { return adapter.mAppBeans.value; } catch (direct) {}
+                return fieldValue(adapter, "mAppBeans");
+            }
+
+            function listKey(list) {
+                try { return "" + JavaSystem.identityHashCode(list); }
+                catch (ignored) {
+                    try { return "hash:" + list.hashCode(); } catch (ignoredAgain) { return "" + list; }
+                }
+            }
+
+            function adapterIdentity(adapter) {
+                try { return "adapter:" + JavaSystem.identityHashCode(adapter); }
+                catch (ignored) { return ""; }
+            }
+
+            function clearAdapterMetadata() {
+                adapterMetadataByIdentity = {};
+            }
+
+            function adapterMetadata(adapter) {
+                var identity = adapterIdentity(adapter);
+                var cached = identity ? adapterMetadataByIdentity[identity] : null;
+                if (cached !== null && cached !== undefined) {
+                    if (cached.syntheticStart < 0) {
+                        var knownStart = syntheticStartByList[cached.listIdentity];
+                        if (knownStart !== undefined) cached.syntheticStart = knownStart;
+                    }
+                    return cached;
+                }
+                var beans = adapterBeans(adapter);
+                if (beans === null) return null;
+                var listIdentity = listKey(beans);
+                var start = syntheticStartByList[listIdentity];
+                var metadata = {
+                    beans: beans,
+                    listIdentity: listIdentity,
+                    syntheticStart: start === undefined ? -1 : start
+                };
+                if (identity) adapterMetadataByIdentity[identity] = metadata;
+                return metadata;
+            }
+
+            function beanAt(adapter, position, metadata) {
+                var state = metadata || adapterMetadata(adapter);
+                var beans = state !== null ? state.beans : null;
                 if (beans === null || position < 0 || position >= beans.size()) return null;
                 return Java.cast(beans.get(position), AppBean);
+            }
+
+            function syntheticStartInList(list) {
+                if (list === null || list === undefined) return -1;
+                for (var i = 0; i < list.size(); i++) {
+                    try {
+                        if (syntheticPackage(Java.cast(list.get(i), AppBean)) !== null) return i;
+                    } catch (ignored) {}
+                }
+                return list.size();
+            }
+
+            function mayContainSynthetic(adapter, position, metadata) {
+                var state = metadata || adapterMetadata(adapter);
+                if (state === null) return true;
+                var start = state.syntheticStart;
+                // Unknown list metadata is handled conservatively; known stock prefixes take the
+                // fast path and never cross the JS/Java reflection bridge during scrolling.
+                return start < 0 || position >= start;
             }
 
             function syntheticPackage(bean) {
@@ -765,13 +1155,17 @@ Java.perform(function () {
                         try { cached.$dispose(); } catch (ignored) {}
                     }
                     delete iconCache[keys[i]];
+                    delete labelCache[keys[i]];
                 }
             }
 
             function loadLabel(pkg) {
-                // PackageManager label зависит от текущей locale. Не кэшируем его на жизнь launcher,
-                // иначе payload 10001 после смены языка снова нарисует прежнюю подпись.
-                return "" + pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0));
+                if (labelCache[pkg]) return labelCache[pkg];
+                // PackageManager label зависит от locale. Инвалидируем его при PACKAGE_CHANGED,
+                // поэтому между прокрутками не повторяем Binder-вызов на каждый bind.
+                var label = "" + pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0));
+                labelCache[pkg] = label;
+                return label;
             }
 
             function physicalScreenId(owner, view) {
@@ -787,8 +1181,38 @@ Java.perform(function () {
                 return (screenId === 0 || screenId === 1) ? screenId : -1;
             }
 
+            /**
+             * Runs at most twelve times while the list is being attached. Once a RecyclerView is
+             * found, no scroll-time work is added. View caching is an Android framework feature;
+             * it preserves OEM bind/click/drag semantics and only avoids recreating off-screen
+             * holders which this launcher otherwise inflates again on every quick page swipe.
+             */
+            function tuneAllAppsRecyclerCache(holder) {
+                if (allAppsRecyclerCacheTuned || allAppsRecyclerCacheAttempts >= 12
+                        || AllAppsRecyclerView === null) return;
+                allAppsRecyclerCacheAttempts++;
+                try {
+                    var itemView = null;
+                    try { itemView = holder.itemView.value; } catch (direct) {}
+                    if (itemView === null || itemView === undefined) itemView = fieldValue(holder, "itemView");
+                    if (itemView === null || itemView === undefined) return;
+                    var parent = itemView.getParent();
+                    if (parent === null) return;
+                    var recycler = Java.cast(parent, AllAppsRecyclerView);
+                    recycler.setItemViewCacheSize(ALL_APPS_VIEW_CACHE_SIZE);
+                    allAppsRecyclerCacheTuned = true;
+                    Log.i(TAG, "[allapps] RecyclerView holder cache=" + ALL_APPS_VIEW_CACHE_SIZE);
+                } catch (ignored) {
+                    // The holder can be bound before attachment, or this firmware can use a custom
+                    // parent. Retry a few early binds, then leave stock RecyclerView behavior intact.
+                }
+            }
+
             function finishBoundItem(adapter, holder, position) {
-                var bean = beanAt(adapter, position);
+                tuneAllAppsRecyclerCache(holder);
+                var metadata = adapterMetadata(adapter);
+                if (!mayContainSynthetic(adapter, position, metadata)) return;
+                var bean = beanAt(adapter, position, metadata);
                 var pkg = syntheticPackage(bean);
                 if (pkg === null) return;
                 var icon = loadIcon(pkg);
@@ -855,7 +1279,7 @@ Java.perform(function () {
             // owner-click; иначе глобально добавленные записи были бы placeholder-плитками без запуска.
             var SecondAdapter = null;
             try {
-                SecondAdapter = Java.use("com.qinggan.secondlauncher.adapter.SecondAllAppAdapter");
+                    SecondAdapter = Java.use("com.qinggan.secondlauncher.adapter.SecondAllAppAdapter");
             } catch (absent) {
                 Log.i(TAG, "[allapps] optional SecondAllAppAdapter is absent");
             }
@@ -869,6 +1293,8 @@ Java.perform(function () {
                         try {
                             var list = fieldValue(this, "allAppList");
                             if (list === null || position < 0 || position >= list.size()) return;
+                            var secondStart = syntheticStartByList[listKey(list)];
+                            if (secondStart !== undefined && position < secondStart) return;
                             var bean = Java.cast(list.get(position), AppBean);
                             var pkg = syntheticPackage(bean);
                             if (pkg === null) return;
@@ -905,7 +1331,12 @@ Java.perform(function () {
             var getAll = Data.getAllApps.overload('int');
             getAll.implementation = function (screenId) {
                 var list = getAll.call(Data, screenId);
-                if ((screenId === 0 || screenId === 1) && list !== null) addMissingApps(list);
+                if ((screenId === 0 || screenId === 1) && list !== null) {
+                    filterFrozenApps(list);
+                    addMissingApps(list);
+                    syntheticStartByList[listKey(list)] = syntheticStartInList(list);
+                    clearAdapterMetadata();
+                }
                 return list;
             };
 
@@ -1068,6 +1499,10 @@ Java.perform(function () {
                 try {
                     var sid = managedScreenId(this, -1);
                     if (sid === 0) {
+                        if (isUserFullscreen(topActivityForScreen(0, null).pkg)) {
+                            forceHideDockController(this, "screen-lift driver");
+                            return result;
+                        }
                         var navigationBar = runtimeObject(dockField(this, "mNavigationBar"));
                         if (navigationBar === null) return result;
                         updateIcons(navigationBar, sid, true);
@@ -1083,9 +1518,14 @@ Java.perform(function () {
             // attached/updated, so reconcile the current property there as well.
             var controllerShow = LiftController.show.overload();
             controllerShow.implementation = function () {
+                var sid = managedScreenId(this, -1);
+                if ((sid === 0 || sid === 1)
+                        && isUserFullscreen(topActivityForScreen(sid, null).pkg)) {
+                    forceHideDockController(this, "blocked show display=" + sid);
+                    return;
+                }
                 var result = controllerShow.call(this);
                 try {
-                    var sid = managedScreenId(this, -1);
                     if (sid === 0) {
                         var navigationBar = runtimeObject(dockField(this, "mNavigationBar"));
                         if (navigationBar !== null) {
@@ -1119,7 +1559,7 @@ Java.perform(function () {
                     var sid = 0;
                     try { sid = managedScreenId(this, fallbackScreen); } catch (e) {}
                     if (sid !== 0 && sid !== 1) return origDismiss.call(this);
-                    var fg = fgByScreen[sid];
+                    var fg = topActivityForScreen(sid, null);
                     var moving = activeMoveDockGuard();
                     var pending = pendingDockLaunch(sid);
                     // Разведочный лог ДО решения: без него «хук не встал» неотличимо от «условие не
@@ -1129,6 +1569,13 @@ Java.perform(function () {
                             + (moving ? " moving=" + moving.pkg + "/" + Math.ceil(moving.remaining) + "ms" : "")
                             + (pending ? " pending=" + pending.pkg + "/" + Math.ceil(pending.remaining) + "ms" : "")); } catch (ee) {}
                     try {
+                        // Fullscreen policy wins over stale transfer/launch guards. Do not enter the
+                        // asynchronous OEM dismiss path: hide and detach the attached root now.
+                        if (isUserFullscreen(fg.pkg)) {
+                            if (forceHideDockController(this, "dismiss fullscreen " + label
+                                    + " display=" + sid)) return;
+                            return origDismiss.call(this); // firmware fallback without controller fields
+                        }
                         if (moving !== null) {
                             try { Java.use("android.util.Log").i("voyahdock", "dismiss BLOCKED " + label
                                     + " active transfer " + moving.pkg); } catch (ee) {}
@@ -1162,34 +1609,70 @@ Java.perform(function () {
             Log.e(TAG, "pinDock main/shared controller error: " + e);
         }
 
-        // 4b) Fullscreen OEM UI и transfer штатно скрывают navigation bar. LauncherModel уже получает
-        // TOP_ACTIVITY_CHANGED; после оригинальной обработки повторно просим показать bar ТОГО display,
-        // где top снова относится к приложению с оконным viewport. Во время переноса штатный handler
-        // сохранит этот show как VisibleRequest, а onMoveStop применит его после завершения анимации.
+        // 4b) LauncherModel уже получает авторитетный TOP_ACTIVITY_CHANGED. Для обычного стороннего
+        // viewport повторно показываем dock нужного display, а для пакета из пользовательского fullscreen-
+        // списка ЯВНО скрываем его. Одного разрешения пройти в штатный dismiss() недостаточно: на OD при
+        // обычном запуске third-party приложения dismiss вообще не вызывается.
         try {
             var TopLM = Java.use("com.qinggan.app.launcher.LauncherModel");
-            var AppUtils = Java.use("com.qinggan.launcher.base.utils.AppUtils");
-            // Separator constant is a convenience only. Keep transfer recovery alive on launcher
-            // variants where the account package/class is absent or renamed.
-            var AccountConstantUtil = null;
-            try { AccountConstantUtil = Java.use("com.qinggan.account.AccountConstantUtil"); }
-            catch (e) { Log.w(TAG, "[dock] AccountConstantUtil unavailable; using | separator: " + e); }
             var retainedLauncherModel = null;
 
-            function recoverPhysicalDock(model, context, displayId, reason) {
-                if (displayId !== 0 && displayId !== 1) return;
-                var top = cleanJavaString(AppUtils.getTopAppInfo(context, displayId, 4));
-                var separator = "|";
-                try {
-                    if (AccountConstantUtil !== null) {
-                        separator = cleanJavaString(AccountConstantUtil.SEPARATOR.value) || "|";
+            function modelDockController(model, displayId) {
+                var controllerField = displayId === 0
+                        ? "mMainScreenNavigationBar" : "mSecondScreenNavigationBar";
+                return runtimeObject(dockField(model, controllerField));
+            }
+
+            // QGBus navigation visibility requests are queued independently of TOP_ACTIVITY_CHANGED.
+            // A late visible=true was the repeat-launch resurrection path, and the live launcher calls
+            // the controller through INavigationBarController (where a concrete show() hook alone is
+            // not reliable). Normalize every model request while the authoritative top is fullscreen.
+            function installFullscreenVisibilityGate(methodName, displayId) {
+                var original = TopLM[methodName].overload(
+                        'java.lang.String', 'java.lang.String', 'boolean');
+                original.implementation = function (pkgArg, actArg, visible) {
+                    var requestedPkg = cleanJavaString(pkgArg);
+                    var foreground = topActivityForScreen(displayId, null);
+                    // With no live helper answer, the request is fresher than updateSelectedApp cache.
+                    var decisionPkg = foreground.live
+                            ? foreground.pkg : (requestedPkg || foreground.pkg);
+                    if (!isUserFullscreen(decisionPkg)) {
+                        return original.call(this, pkgArg, actArg, visible);
                     }
-                } catch (ignored) {}
-                var parts = top === "" ? [] : top.split(separator);
-                var pkg = parts.length > 0 ? cleanJavaString(parts[0]) : "";
-                var act = parts.length > 1 ? cleanJavaString(parts[1]) : "";
-                fgByScreen[displayId].pkg = pkg;
-                fgByScreen[displayId].act = act;
+                    fgByScreen[displayId].pkg = decisionPkg;
+                    if (!foreground.live) fgByScreen[displayId].act = cleanJavaString(actArg);
+                    // Calling OEM dismiss() again after x already reached -width makes the live
+                    // controller removeView(root), reintroducing an async detach/show race. Keep the
+                    // Window detached; use OEM false only as a cross-firmware fallback
+                    // when the controller fields are unavailable. A later original(true) always
+                    // invokes show() and restores x=0 on the confirmed H97C LauncherModel ABI.
+                    var controller = modelDockController(this, displayId);
+                    var label = "model gate " + methodName + " display=" + displayId;
+                    if (forceHideDockController(controller, label)) {
+                        Log.i("voyahdock", "model gate forced hidden display=" + displayId
+                                + " pkg=" + decisionPkg + " requestedVisible=" + visible);
+                        return;
+                    }
+                    return original.call(this, pkgArg, actArg, false);
+                };
+            }
+
+            installFullscreenVisibilityGate("handleUpdateMainNavigationBar", 0);
+            installFullscreenVisibilityGate("handleUpdateSecondNavigationBar", 1);
+            Log.i(TAG, "[dock] LauncherModel fullscreen visibility gates installed");
+
+            function reconcilePhysicalDock(model, context, displayId, reason) {
+                if (displayId !== 0 && displayId !== 1) return;
+                if (retainedLauncherModel === null) retainedLauncherModel = Java.retain(model);
+                var foreground = topActivityForScreen(displayId, context);
+                var pkg = foreground.pkg;
+                var act = foreground.act;
+                if (isUserFullscreen(pkg)) {
+                    if (displayId === 0) model.handleUpdateMainNavigationBar(pkg, act, false);
+                    else model.handleUpdateSecondNavigationBar(pkg, act, false);
+                    Log.i("voyahdock", reason + " hid display=" + displayId + " dock for " + pkg);
+                    return;
+                }
                 if (!dockKept(pkg, act)) return;
                 if (displayId === 0) model.handleUpdateMainNavigationBar(pkg, act, true);
                 else model.handleUpdateSecondNavigationBar(pkg, act, true);
@@ -1199,11 +1682,13 @@ Java.perform(function () {
             schedulePhysicalDockRecovery = function (model, reason) {
                 try {
                     if (retainedLauncherModel === null) retainedLauncherModel = Java.retain(model);
-                    setTimeout(function () {
+                    if (physicalDockRecoveryTimer !== null) clearTimeout(physicalDockRecoveryTimer);
+                    physicalDockRecoveryTimer = setTimeout(function () {
+                        physicalDockRecoveryTimer = null;
                         Java.scheduleOnMainThread(function () {
                             try {
-                                recoverPhysicalDock(retainedLauncherModel, ctx(), 0, reason);
-                                recoverPhysicalDock(retainedLauncherModel, ctx(), 1, reason);
+                                reconcilePhysicalDock(retainedLauncherModel, ctx(), 0, reason);
+                                reconcilePhysicalDock(retainedLauncherModel, ctx(), 1, reason);
                             } catch (e) { Log.e(TAG, "[dock] delayed transfer recovery: " + e); }
                         });
                     }, 300);
@@ -1217,7 +1702,7 @@ Java.perform(function () {
                     if (intent === null || ("" + intent.getAction()) !==
                             "android.intent.action.TOP_ACTIVITY_CHANGED") return result;
                     var displayId = intent.getIntExtra("displayId", -1);
-                    recoverPhysicalDock(this, context, displayId, "TOP_ACTIVITY_CHANGED");
+                    reconcilePhysicalDock(this, context, displayId, "TOP_ACTIVITY_CHANGED");
                 } catch (e) { Log.e(TAG, "[dock] TOP_ACTIVITY_CHANGED recovery: " + e); }
                 return result;
             };
@@ -1237,15 +1722,17 @@ Java.perform(function () {
             try {
                 var floatHomeOff = function () { return cfg("floathome") !== "0"; };
                 var LM = Java.use("com.qinggan.app.launcher.LauncherModel");
-                LM.isThirdShowFloatApp.overload('java.lang.String').implementation = function (cn) {
-                    return floatHomeOff() ? false : this.isThirdShowFloatApp(cn);
+                var launcherFloatApp = LM.isThirdShowFloatApp.overload('java.lang.String');
+                launcherFloatApp.implementation = function (cn) {
+                    return floatHomeOff() ? false : launcherFloatApp.call(this, cn);
                 };
                 Log.i(TAG, "[dock] floating home suppressed (LauncherModel)");
             } catch (e) { Log.e(TAG, "[dock] LauncherModel.isThirdShowFloatApp skip: " + e); }
             try {
                 var TAU = Java.use("com.qinggan.launcher.base.drag.ThirdAppUtil");
-                TAU.isThirdShowFloatApp.overload('java.lang.String').implementation = function (cn) {
-                    return cfg("floathome") !== "0" ? false : this.isThirdShowFloatApp(cn);
+                var thirdFloatApp = TAU.isThirdShowFloatApp.overload('java.lang.String');
+                thirdFloatApp.implementation = function (cn) {
+                    return cfg("floathome") !== "0" ? false : thirdFloatApp.call(this, cn);
                 };
                 Log.i(TAG, "[dock] floating home suppressed (ThirdAppUtil)");
             } catch (e) { Log.e(TAG, "[dock] ThirdAppUtil.isThirdShowFloatApp skip: " + e); }
@@ -1353,6 +1840,25 @@ Java.perform(function () {
                             try {
                                 refreshCache();
                                 setTimeout(updateAllNavbars, 300);   // дать навбару стабилизироваться
+                                if (intent !== null && intent.getBooleanExtra("reloadAllApps", false)) {
+                                    // A freeze/unfreeze changes PackageManager enabled state without an
+                                    // install/remove broadcast guaranteed on every OEM build. Invalidate
+                                    // both caches explicitly so the next reload can add a restored app or
+                                    // remove a newly frozen one immediately.
+                                    installedSnapshot = null;
+                                    syntheticStartByList = {};
+                                    clearAdapterMetadata();
+                                    setTimeout(function () {
+                                        Java.scheduleOnMainThread(function () {
+                                            try {
+                                                if (reloadData !== null && reloadData !== undefined) {
+                                                    reloadData.call(Data);
+                                                    Log.i(TAG, "[allapps] frozen-app blacklist reloaded");
+                                                }
+                                            } catch (e) { Log.e(TAG, "[allapps] frozen-app reload failed: " + e); }
+                                        });
+                                    }, 300);
+                                }
                             } catch (e) { Log.e(TAG, "[dock] onReceive err: " + e); }
                         }
                     }
@@ -1385,8 +1891,6 @@ Java.perform(function () {
         // PackageManager and OEM navbar construction finish at different moments on a true cold boot.
         // These are bounded one-shot reconciliations, not polling; normal boots still update immediately.
         setTimeout(updateAllNavbars, 8000);
-        setTimeout(updateAllNavbars, 12000);
-        setTimeout(updateAllNavbars, 15000);
 
         Log.i(TAG, "[dock] NavigationBarMain hooks installed (updateTheme/updateSelectedApp/onClick)");
     } catch (e) {

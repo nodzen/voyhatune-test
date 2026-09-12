@@ -6,6 +6,7 @@ REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
 SERVICE="$REPO_ROOT/Native/app/src/main/java/ru/big/town/anative/TripStatsService.java"
 MODE_POLICY="$REPO_ROOT/Native/app/src/main/java/ru/big/town/anative/ModeSyncPolicy.java"
 APPLY_ENGINE="$REPO_ROOT/Native/app/src/main/java/ru/big/town/anative/ApplyEngine.java"
+MODE_FEEDBACK="$REPO_ROOT/Native/app/src/main/java/ru/big/town/anative/ModeFeedbackController.java"
 
 fail() {
     echo "FAIL: $*" >&2
@@ -48,9 +49,11 @@ fi
 # After the finite 30-second guard the car is again allowed to become the source of truth.
 require_fixed "$MODE_POLICY" 'POST_RESTORE_SETTLE_MS = 30_000L'
 require_fixed "$MODE_POLICY" \
-    'if (restoreCompleted && nowUptime >= acceptAfterUptime) return Decision.ACCEPT;'
+    'return acceptsExternalFeedback(modeKey) ? Decision.ACCEPT : Decision.IGNORE;'
 require_fixed "$APPLY_ENGINE" 'MODE_SYNC_POLICY.canPersist('
-require_fixed "$SERVICE" \
-    'ApplyEngine.persistModeFeedbackIfAllowed(getApplicationContext(), energy, mode);'
+require_fixed "$MODE_FEEDBACK" 'ApplyEngine.persistModeFeedbackIfAllowed('
+if grep -Eq 'ModeFeedback|persistModeFeedback|INTEREST_VEHICLE_STATE' "$SERVICE"; then
+    fail "TripStatsService must not own vehicle-mode feedback"
+fi
 
 echo "PASS: TripStats preserves Gear transitions and coalesces CAN-driven disk/broadcast work"

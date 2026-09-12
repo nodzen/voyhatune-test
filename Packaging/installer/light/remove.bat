@@ -47,6 +47,8 @@ adb.exe shell "rm -f /data/local/bin/apollo_tech.js /data/local/bin/apollo_tech.
 adb.exe shell "rm -f /data/local/bin/keyboard_lock_en.js /data/local/bin/keyboard_ru.js /data/local/bin/voyahtune_keyboard_en_config.json /data/local/bin/voyahtune_keyboard_ru_config.json /data/local/bin/voyahtune_skb_qwerty_ru.json /data/local/tmp/voyahtune_keyboard.pid /data/local/tmp/voyahtune_keyboard.attempt /data/local/tmp/voyahtune_keyboard.txt /data/local/tmp/voyahtune_keyboard.txt.try"
 adb.exe shell "rm -f /data/local/bin/voyahtune-hook-manifest.json /data/local/tmp/voyahtune-hook-status.v1 /data/local/tmp/voyahtune-hook-status.v1.*.new"
 adb.exe shell settings delete global voyahtune_keyboard_mode 1>nul 2>nul
+adb.exe shell "test ! -e /data/local/bin/app_client.js && test ! -e /data/local/bin/app_client.js.voyahtune.new && test ! -e /data/local/bin/fullscreen_client.js && test ! -e /data/local/bin/fullscreen_client.js.voyahtune.new && ! ls /data/local/tmp/voyahtune_app_client.* >/dev/null 2>&1 && ! ls /data/local/tmp/voyahtune_fullscreen_client.* >/dev/null 2>&1"
+if errorlevel 1 exit /b 1
 adb.exe shell "rm -f /data/local/tmp/voyahtune_apollo.pid /data/local/tmp/voyahtune_apollo.attempt /data/local/tmp/voyahtune_apollo.txt /data/local/tmp/voyahtune_apollo.txt.try && for path in /data/local/tmp/voyahtune_apollo.pid /data/local/tmp/voyahtune_apollo.attempt /data/local/tmp/voyahtune_apollo.txt /data/local/tmp/voyahtune_apollo.txt.try; do if [ -e \"$path\" ] || [ -L \"$path\" ]; then exit 1; fi; done"
 if errorlevel 1 exit /b 1
 if errorlevel 1 (

@@ -21,6 +21,8 @@ public class SetModesConfigReceiver extends BroadcastReceiver {
             "ru.big.town.anative.DOOR_MEDIA_RESUME_CHANGED";
     public static final String ACTION_DOOR_MEDIA_ANY_CHANGED =
             "ru.big.town.anative.DOOR_MEDIA_ANY_CHANGED";
+    public static final String ACTION_PARKING_HEADLIGHTS_CHANGED =
+            "ru.big.town.anative.PARKING_HEADLIGHTS_CHANGED";
 
     @Override
     public void onReceive(Context context, Intent intent) {
@@ -41,6 +43,10 @@ public class SetModesConfigReceiver extends BroadcastReceiver {
                     intent.getBooleanExtra("enabled", false));
             return;
         }
+        if (ACTION_PARKING_HEADLIGHTS_CHANGED.equals(action)) {
+            applyParkingHeadlightsSetting(context, intent.getBooleanExtra("enabled", false));
+            return;
+        }
         if (!BuildConfig.IS_FULL) return;
         if ("ru.big.town.anative.STEER_CONFIG".equals(action)) {
             String[] buttons = {"Star", "Dvr", "Voice", "Phone"};
@@ -50,9 +56,15 @@ public class SetModesConfigReceiver extends BroadcastReceiver {
                 String longKey = "steer" + button + "Long";
                 SetModesReceiverDynamic.mirrorSteer(context, intent, shortKey);
                 SetModesReceiverDynamic.mirrorSteer(context, intent, longKey);
-                needsBackService |= "system_back".equals(intent.getStringExtra(shortKey));
-                needsBackService |= "system_back".equals(intent.getStringExtra(longKey));
+                needsBackService |= SteeringActionSequence.contains(
+                        intent.getStringExtra(shortKey), "system_back");
+                needsBackService |= SteeringActionSequence.contains(
+                        intent.getStringExtra(longKey), "system_back");
             }
+            needsBackService |= SteeringActionSequence.contains(
+                    intent.getStringExtra("dock1Long"), "system_back");
+            needsBackService |= SteeringActionSequence.contains(
+                    intent.getStringExtra("dock2Long"), "system_back");
             BackButtonService.setSteeringBackEnabled(context, needsBackService);
             Log.i(TAG, "STEER_CONFIG зеркалирован");
         } else if ("ru.big.town.anative.DOCK_CONFIG".equals(action)) {
@@ -64,10 +76,24 @@ public class SetModesConfigReceiver extends BroadcastReceiver {
             context.sendBroadcast(reload);
             SetModesReceiverDynamic.sendWinReload(context);
             Log.i(TAG, "DOCK_CONFIG зеркалирован + reload");
+        } else if ("ru.big.town.anative.FROZEN_APPS_CONFIG".equals(action)) {
+            SetModesReceiverDynamic.mirrorFrozenApps(context, intent);
+            Intent reload = new Intent("ru.big.town.anative.DOCK_RELOAD");
+            reload.putExtra("reloadAllApps", true);
+            reload.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
+            context.sendBroadcast(reload);
+            Log.i(TAG, "FROZEN_APPS_CONFIG применён + All Apps reload");
         } else if ("ru.big.town.anative.FREEFORM_CONFIG".equals(action)) {
             SetModesReceiverDynamic.mirrorFreeform(context, intent);
             SetModesReceiverDynamic.sendWinReload(context);
             Log.i(TAG, "FREEFORM_CONFIG зеркалирован + reload");
+        } else if ("ru.big.town.anative.FULLSCREEN_APPS_CONFIG".equals(action)) {
+            SetModesReceiverDynamic.mirrorFullscreenApps(context, intent);
+            Intent reload = new Intent("ru.big.town.anative.DOCK_RELOAD");
+            reload.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
+            context.sendBroadcast(reload);
+            SetModesReceiverDynamic.sendWinReload(context);
+            Log.i(TAG, "FULLSCREEN_APPS_CONFIG зеркалирован + dock/window reload");
         } else if ("ru.big.town.anative.APP_DPI_CONFIG".equals(action)) {
             SetModesReceiverDynamic.mirrorAppDpi(context, intent);
             SetModesReceiverDynamic.sendWinReload(context);
@@ -94,6 +120,24 @@ public class SetModesConfigReceiver extends BroadcastReceiver {
         }
         Log.i(TAG, key + "=" + enabled + "; service consumer wiper=" + wiperEnabled
                 + " pause=" + pauseMedia + " anyDoor=" + pauseAnyDoor);
+    }
+
+    /** Keeps the light service alive when parking-only control is enabled. */
+    private static void applyParkingHeadlightsSetting(Context context, boolean enabled) {
+        if (context == null) return;
+        android.content.SharedPreferences prefs = context.getSharedPreferences(
+                "NativePrefs", Context.MODE_PRIVATE);
+        prefs.edit().putBoolean("headlightsOffInParking", enabled).apply();
+        boolean autoLight = prefs.getBoolean("autoLight", false);
+        if (enabled || autoLight) {
+            Intent service = new Intent(context, LightSensorService.class)
+                    .setAction(LightSensorService.ACTION_PARKING_HEADLIGHTS_CHANGED)
+                    .putExtra("enabled", enabled);
+            context.startForegroundService(service);
+        } else {
+            context.stopService(new Intent(context, LightSensorService.class));
+        }
+        Log.i(TAG, "headlightsOffInParking=" + enabled + "; autoLight=" + autoLight);
     }
 
     private static void applyKeyboardMode(Context context, String requestedMode) {

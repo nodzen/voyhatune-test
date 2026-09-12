@@ -8,6 +8,11 @@ SERVICE="$ROOT/Native/app/src/main/java/ru/big/town/anative/SetModesService.java
 MANIFEST="$ROOT/Native/app/src/main/AndroidManifest.xml"
 VD="$ROOT/Packaging/inject/vd_bypass.js"
 DOCK="$ROOT/Packaging/inject/launcherdock.js"
+SPLIT_STORE="$ROOT/RestoreMode/app/src/main/java/ru/big/town/restoremode/SplitStore.java"
+SPLIT_SYNC="$ROOT/RestoreMode/app/src/main/java/ru/big/town/restoremode/SplitConfigSync.java"
+SPLIT_MAIN="$ROOT/RestoreMode/app/src/main/java/ru/big/town/restoremode/MainActivity.java"
+SPLIT_SAVE="$ROOT/RestoreMode/app/src/main/java/ru/big/town/restoremode/SplitRatioSaveReceiver.java"
+ADVANCE="$ROOT/RestoreMode/app/src/main/java/ru/big/town/restoremode/AdvanceActivity.java"
 
 fail() {
     echo "screen-lift resize/restore contract test failed: $*" >&2
@@ -42,6 +47,18 @@ require_fixed "$HOST" 'if (actualType != type) {'
 require_fixed "$HOST" 'applyScreenLiftSize(type);'
 require_fixed "$HOST" 'pane.vd.resize(width, height, effectiveDpi(pane));'
 require_fixed "$HOST" 'unregisterReceiver(screenLiftReceiver);'
+
+# Interactive resize is explicitly opt-out at two levels: a global safety switch and the per-preset
+# flag. Turning the global switch off must prevent every launch path from sending a resizable split,
+# while preserving the individual preset selection for a later re-enable.
+require_fixed "$SPLIT_STORE" 'KEY_INTERACTIVE_DIVIDER_ENABLED = "splitInteractiveDividerEnabled"'
+require_fixed "$SPLIT_STORE" 'preferences.getBoolean(KEY_INTERACTIVE_DIVIDER_ENABLED, true)'
+require_fixed "$ADVANCE" 'splitInteractiveDividerSwitch = findViewById(R.id.splitInteractiveDividerSwitch);'
+require_fixed "$ADVANCE" 'SplitStore.setInteractiveDividerEnabled(prefs, enabled);'
+require_fixed "$SPLIT_MAIN" 'preset.resizable'
+require_fixed "$SPLIT_MAIN" 'SplitStore.isInteractiveDividerEnabled(sharedPreferences)'
+require_fixed "$SPLIT_SYNC" 'SplitStore.isInteractiveDividerEnabled(prefs)'
+require_fixed "$SPLIT_SAVE" '!SplitStore.isInteractiveDividerEnabled(prefs)'
 
 # Physical apps are resized through a normal WMS traversal; resolved/source-display bounds must not
 # be copied during reparent.
@@ -80,7 +97,10 @@ require_fixed "$DOCK" 'var compactSlot1 = dockPackage(0, 1, false) !== "none"'
 require_fixed "$DOCK" 'var compactSlot2 = dockPackage(0, 2, false) !== "none"'
 require_fixed "$DOCK" 'var controllerShow = LiftController.show.overload();'
 require_fixed "$DOCK" 'controller show reconciled driver layout'
-require_fixed "$DOCK" 'setTimeout(updateAllNavbars, 15000);'
+require_fixed "$DOCK" 'setTimeout(updateAllNavbars, 8000);'
+if grep -Eq 'setTimeout\(updateAllNavbars, (12000|15000)\);' "$DOCK"; then
+    fail "launcher startup reconciliation keeps unnecessary late polling passes"
+fi
 require_fixed "$DOCK" 'setDockViewVisibility(views.allApps, compact ? 8 : 0, "allApps");'
 require_fixed "$DOCK" 'setDockViewVisibility(views.extra1, compact ? 8 : 0, "slot3");'
 require_fixed "$DOCK" 'setDockViewVisibility(views.extra2, compact ? 8 : 0, "slot4");'

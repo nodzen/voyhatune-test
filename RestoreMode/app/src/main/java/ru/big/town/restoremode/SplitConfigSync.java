@@ -7,7 +7,7 @@ import android.content.SharedPreferences;
 import java.util.List;
 
 /**
- * Единая event-driven публикация сохранённой конфигурации в Native. Dock/steering/DPI/keyboard
+ * Единая event-driven публикация сохранённой конфигурации в Native. Fullscreen/Dock/steering/DPI/keyboard
  * зеркалируются при изменении, старте и физическом пробуждении без периодического чтения.
  */
 final class SplitConfigSync {
@@ -17,10 +17,24 @@ final class SplitConfigSync {
     private SplitConfigSync() {}
 
     static void pushAll(Context context, SharedPreferences prefs) {
+        pushFrozenApps(context, prefs);
+        pushFullscreenApps(context, prefs);
         pushAppDpi(context, prefs, null, 0);
         pushDock(context, prefs);
         pushSteering(context, prefs);
         pushKeyboard(context, prefs);
+    }
+
+    static void pushFrozenApps(Context context, SharedPreferences prefs) {
+        Intent i = configIntent("ru.big.town.anative.FROZEN_APPS_CONFIG");
+        i.putExtra("packagesCsv", FrozenAppStore.snapshotCsv(prefs));
+        context.sendBroadcast(i);
+    }
+
+    static void pushFullscreenApps(Context context, SharedPreferences prefs) {
+        Intent i = configIntent("ru.big.town.anative.FULLSCREEN_APPS_CONFIG");
+        i.putExtra("packagesCsv", FullscreenAppStore.snapshotCsv(prefs));
+        context.sendBroadcast(i);
     }
 
     /** Публикует полный DPI snapshot; changedPkg нужен, чтобы надёжно передать переход в «Авто» (0). */
@@ -42,6 +56,8 @@ final class SplitConfigSync {
         i.putExtra("dock2", p2.isEmpty() ? "none" : p2);
         i.putExtra("dock1Dpi", p1.isEmpty() ? 0 : AppDpiStore.get(prefs, p1));
         i.putExtra("dock2Dpi", p2.isEmpty() ? 0 : AppDpiStore.get(prefs, p2));
+        i.putExtra("dock1Long", resolveSteerAction(dockLongAction(1, prefs), prefs));
+        i.putExtra("dock2Long", resolveSteerAction(dockLongAction(2, prefs), prefs));
         addDockSplitExtras(i, 1, p1, prefs);
         addDockSplitExtras(i, 2, p2, prefs);
         context.sendBroadcast(i);
@@ -49,14 +65,14 @@ final class SplitConfigSync {
 
     static void pushSteering(Context context, SharedPreferences prefs) {
         Intent i = configIntent("ru.big.town.anative.STEER_CONFIG");
-        i.putExtra("steerStarShort", resolveSteerAction(prefs.getString("steerStarShort", "none"), prefs));
-        i.putExtra("steerStarLong",  resolveSteerAction(prefs.getString("steerStarLong",  "none"), prefs));
-        i.putExtra("steerDvrShort",  resolveSteerAction(prefs.getString("steerDvrShort",  "none"), prefs));
-        i.putExtra("steerDvrLong",   resolveSteerAction(prefs.getString("steerDvrLong",   "none"), prefs));
-        i.putExtra("steerVoiceShort",  resolveSteerAction(prefs.getString("steerVoiceShort",  "none"), prefs));
-        i.putExtra("steerVoiceLong",   resolveSteerAction(prefs.getString("steerVoiceLong",   "none"), prefs));
-        i.putExtra("steerPhoneShort",  resolveSteerAction(prefs.getString("steerPhoneShort",  "none"), prefs));
-        i.putExtra("steerPhoneLong",   resolveSteerAction(prefs.getString("steerPhoneLong",   "none"), prefs));
+        i.putExtra("steerStarShort", resolveSteerActions(prefs.getString("steerStarShort", "none"), prefs));
+        i.putExtra("steerStarLong", resolveSteerActions(prefs.getString("steerStarLong", "none"), prefs));
+        i.putExtra("steerDvrShort", resolveSteerActions(prefs.getString("steerDvrShort", "none"), prefs));
+        i.putExtra("steerDvrLong", resolveSteerActions(prefs.getString("steerDvrLong", "none"), prefs));
+        i.putExtra("steerVoiceShort", resolveSteerActions(prefs.getString("steerVoiceShort", "none"), prefs));
+        i.putExtra("steerVoiceLong", resolveSteerActions(prefs.getString("steerVoiceLong", "none"), prefs));
+        i.putExtra("steerPhoneShort", resolveSteerActions(prefs.getString("steerPhoneShort", "none"), prefs));
+        i.putExtra("steerPhoneLong", resolveSteerActions(prefs.getString("steerPhoneLong", "none"), prefs));
         context.sendBroadcast(i);
     }
 
@@ -96,10 +112,33 @@ final class SplitConfigSync {
         i.putExtra("dock" + slot + "SplitRatio", ps.ratio);
         i.putExtra("dock" + slot + "SplitLDpi", AppDpiStore.get(prefs, ps.l));
         i.putExtra("dock" + slot + "SplitRDpi", AppDpiStore.get(prefs, ps.r));
-        i.putExtra("dock" + slot + "SplitResizable", ps.resizable);
+        i.putExtra("dock" + slot + "SplitResizable", ps.resizable
+                && SplitStore.isInteractiveDividerEnabled(prefs));
         i.putExtra("dock" + slot + "SplitFraction", SplitStore.leftFraction(ps));
         i.putExtra("dock" + slot + "SplitPresetIdx", idx);       // fallback для старого Native
         i.putExtra("dock" + slot + "SplitPresetId", ps.id);
+    }
+
+    /**
+     * Долгое действие слота дока. Старые настройки хранили только индекс split-пресета;
+     * при отсутствии нового ключа превращаем его в обычное action-значение для Native.
+     */
+    private static String dockLongAction(int slot, SharedPreferences prefs) {
+        String stored = prefs.getString("dockOverride" + slot + "Long", "");
+        if (stored != null && !stored.trim().isEmpty()) return stored;
+        int idx = prefs.getInt("dockOverride" + slot + "Split", -1);
+        List<SplitStore.Preset> all = SplitStore.load(prefs);
+        return idx >= 0 && idx < all.size() && all.get(idx).ready()
+                ? "split:" + idx : "none";
+    }
+
+    static String resolveSteerActions(String stored, SharedPreferences prefs) {
+        List<String> resolved = new java.util.ArrayList<>();
+        for (String action : SteeringActionStore.decode(stored)) {
+            String value = resolveSteerAction(action, prefs);
+            if (value != null && !value.isEmpty() && !"none".equals(value)) resolved.add(value);
+        }
+        return SteeringActionStore.encode(resolved);
     }
 
     /** Backward-compatible CSV: старый Native прочитает первые пять полей, новый — все восемь. */
@@ -112,7 +151,8 @@ final class SplitConfigSync {
                 SplitStore.Preset ps = all.get(n);
                 return "split:" + ps.l + "," + ps.r + "," + ps.ratio + ","
                         + AppDpiStore.get(prefs, ps.l) + "," + AppDpiStore.get(prefs, ps.r) + ","
-                        + (ps.resizable ? "1" : "0") + "," + SplitStore.leftFraction(ps) + "," + ps.id;
+                        + (ps.resizable && SplitStore.isInteractiveDividerEnabled(prefs) ? "1" : "0")
+                        + "," + SplitStore.leftFraction(ps) + "," + ps.id;
             }
         } catch (Exception ignored) {}
         return "none";

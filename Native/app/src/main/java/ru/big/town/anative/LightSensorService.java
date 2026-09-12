@@ -11,6 +11,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.ServiceConnection;
+import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Binder;
@@ -48,8 +49,8 @@ import java.util.concurrent.atomic.AtomicLong;
  *    single-flight очереди, не блокируя main и bind/reconnect.
  *  - Safety-poll каждые SAFETY_POLL_MS: фоновая страховка от пропущенного события.
  *    CAN шлёт только при реальной смене цели — холостого трафика не создаёт.
- *  - Общая process-wide подписка CanBusEventHub фильтрует LightStatus, Gear и только
- *    VehicleState 1072 до очереди этого сервиса. Когда BCM сам уходит в «авто» (перевод КПП
+ *  - Общая process-wide подписка CanBusEventHub фильтрует LightStatus и только VehicleState 1072,
+ *    а КПП приходит через GearStateController. Когда BCM сам уходит в «авто» (перевод КПП
  *    в Drive сбрасывает фары в auto) при нашем таргете «ближний» — возвращаем ближний.
  *    Ручное «выкл» (autoLamp=0, headLight=0) под правило не попадает — уважается.
  *    Guard HEADLIGHT_GUARD_MS отсекает «эхо» собственных команд. Так заменяется
@@ -79,6 +80,10 @@ public class LightSensorService extends Service {
     // Broadcast для передачи уровня датчика в RestoreMode UI
     public static final String ACTION_LUX_UPDATE  = "ru.big.town.anative.LUX_UPDATE";
     public static final String EXTRA_SENSOR_LEVEL = "sensorLevel"; // int, -1 если датчик недоступен
+    public static final String ACTION_AUTO_LIGHT_CHANGED =
+            "ru.big.town.anative.AUTO_LIGHT_CHANGED";
+    public static final String ACTION_PARKING_HEADLIGHTS_CHANGED =
+            "ru.big.town.anative.PARKING_HEADLIGHTS_CHANGED";
 
     // Период страховочного опроса: ловит пропущенный колбэк, CAN шлёт только при
     // реальной смене цели — холостого трафика не создаёт.
@@ -131,6 +136,7 @@ public class LightSensorService extends Service {
     private static final String CAR_SIGNAL_PACKAGE = "com.qinggan.carsignal.service";
 
     // CanBus signals routed through the single process-wide callback.
+    private static final int    GEAR_PARKING             = 0;
     private static final int    GEAR_DRIVE               = 3;
     // BCM_RSM_lightSWReason (value 1072): 0 Day, 1 Others, 2 Dark, 3 Tunnel, 4 Darkstart
     private static final int    RSM_LIGHT_SW_REASON      = 1072;
@@ -180,6 +186,8 @@ public class LightSensorService extends Service {
 
     // Текущая зафиксированная цель: true = ближний свет, false = наружный свет выключен
     private boolean headlightsOn = false;
+    private boolean autoLightEnabled = false;
+    private boolean headlightsOffInParking = false;
     private volatile boolean everSent = false;
     private boolean forceInitCompleted = false;
     private long    readyCarSignalEpoch = 0L;
@@ -205,6 +213,7 @@ public class LightSensorService extends Service {
     private volatile int lastReason = -1;
 
     private CanBusEventHub.Subscription canBusSubscription;
+    private GearStateController.Subscription gearStateSubscription;
     private volatile boolean destroyed = false;
     // Последние значимые поля LightStatus — фильтр шума от поворотников/стопа
     private int lastAutoLamp   = -1;
@@ -260,9 +269,6 @@ public class LightSensorService extends Service {
         switch (event.kind) {
             case LIGHT_STATUS:
                 onLightStatusChanged(event.first, event.second, event.third);
-                break;
-            case GEAR:
-                onGear(event.first);
                 break;
             case VEHICLE_STATE:
                 if (event.first == RSM_LIGHT_SW_REASON) onLightSwReason(event.second);
@@ -499,7 +505,8 @@ public class LightSensorService extends Service {
     }
 
     private void requestCarSignalMaintenance() {
-        if (destroyed || !carSignalMaintenancePosted.compareAndSet(false, true)) return;
+        if (destroyed || !autoLightEnabled
+                || !carSignalMaintenancePosted.compareAndSet(false, true)) return;
         Handler io = carSignalIoHandler;
         if (io == null || !io.post(() -> {
             try {
@@ -515,7 +522,7 @@ public class LightSensorService extends Service {
     }
 
     private void ensureBound() {
-        if (destroyed || carSignalBindingRequested) return;
+        if (destroyed || !autoLightEnabled || carSignalBindingRequested) return;
         long now = SystemClock.elapsedRealtime();
         if (now - lastBindAttempt < BIND_RETRY_MS) return;
         lastBindAttempt = now;
@@ -608,7 +615,7 @@ public class LightSensorService extends Service {
     }
 
     private void startRegisterCallbackOnIo() {
-        if (destroyed || !carSignalConnected || carSignalBinder == null
+        if (destroyed || !autoLightEnabled || !carSignalConnected || carSignalBinder == null
                 || carSignalCallbackBinder == null
                 || callbackRegistered || callbackRegistrationInFlight
                 || carSignalCallbackBinder.cleanupScheduled.get()) {
@@ -1064,6 +1071,12 @@ public class LightSensorService extends Service {
         Log.i(TAG, "onCreate() — LightSensorService (event-driven + safety-poll)");
         Log.i(TAG, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         timerHandler = new Handler(Looper.getMainLooper());
+        SharedPreferences lightPrefs = getSharedPreferences("NativePrefs", Context.MODE_PRIVATE);
+        autoLightEnabled = lightPrefs.getBoolean("autoLight", false);
+        headlightsOffInParking = lightPrefs.getBoolean("headlightsOffInParking",
+                lightPrefs.getBoolean("cacheHeadlightsOffInParking", false));
+        Log.i(TAG, "settings: autoLight=" + autoLightEnabled
+                + " headlightsOffInParking=" + headlightsOffInParking);
         carSignalIoThread = new HandlerThread("CarSignalIo");
         carSignalIoThread.start();
         carSignalIoHandler = new Handler(carSignalIoThread.getLooper());
@@ -1091,19 +1104,76 @@ public class LightSensorService extends Service {
         IntentFilter reqFilter = new IntentFilter("ru.big.town.anative.REQUEST_LUX_UPDATE");
         registerReceiver(requestReceiver, reqFilter, RECEIVER_EXPORTED);
 
-        requestCarSignalMaintenance();
-        canBusSubscription = CanBusEventHub.get(this).subscribe(
-                CanBusEventRouter.INTEREST_LIGHT_STATUS
-                        | CanBusEventRouter.INTEREST_GEAR
-                        | CanBusEventRouter.INTEREST_VEHICLE_STATE,
-                new int[]{RSM_LIGHT_SW_REASON}, timerHandler, this::onCanBusEvent);
-        timerHandler.postDelayed(safetyRunnable, 2_000L);
+        gearStateSubscription = VehicleStateControllers.get(this).gear().subscribe(
+                timerHandler, this::onGear);
+        if (autoLightEnabled) startAutomaticLightMonitoring();
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        Log.i(TAG, "onStartCommand()");
+        String action = intent == null ? null : intent.getAction();
+        Log.i(TAG, "onStartCommand(" + action + ")");
+        if (ACTION_AUTO_LIGHT_CHANGED.equals(action)) {
+            boolean enabled = intent.getBooleanExtra("enabled", autoLightEnabled);
+            timerHandler.post(() -> applyAutoLightSetting(enabled));
+        } else if (ACTION_PARKING_HEADLIGHTS_CHANGED.equals(action)) {
+            boolean enabled = intent.getBooleanExtra("enabled", headlightsOffInParking);
+            timerHandler.post(() -> applyParkingHeadlightsSetting(enabled));
+        }
         return START_STICKY;
+    }
+
+    private void applyAutoLightSetting(boolean enabled) {
+        if (destroyed) return;
+        boolean wasEnabled = autoLightEnabled;
+        autoLightEnabled = enabled;
+        headlightsOffInParking = getSharedPreferences("NativePrefs", Context.MODE_PRIVATE)
+                .getBoolean("headlightsOffInParking", headlightsOffInParking);
+        if (enabled) {
+            if (!wasEnabled) forceInitCompleted = false;
+            startAutomaticLightMonitoring();
+        } else {
+            stopAutomaticLightMonitoring();
+        }
+        Log.i(TAG, "autoLight=" + enabled + "; parking=" + headlightsOffInParking);
+    }
+
+    private void applyParkingHeadlightsSetting(boolean enabled) {
+        if (destroyed) return;
+        headlightsOffInParking = enabled;
+        if (enabled && lastGear == GEAR_PARKING
+                && (!everSent || headlightsOn)) {
+            commit(false, "gear=P; parking headlight switch");
+        }
+        Log.i(TAG, "headlightsOffInParking=" + enabled + "; gear=" + lastGear);
+    }
+
+    private void startAutomaticLightMonitoring() {
+        if (destroyed) return;
+        requestCarSignalMaintenance();
+        if (canBusSubscription == null) {
+            canBusSubscription = CanBusEventHub.get(this).subscribe(
+                    CanBusEventRouter.INTEREST_LIGHT_STATUS
+                            | CanBusEventRouter.INTEREST_VEHICLE_STATE,
+                    new int[]{RSM_LIGHT_SW_REASON}, timerHandler, this::onCanBusEvent);
+        }
+        timerHandler.removeCallbacks(safetyRunnable);
+        timerHandler.postDelayed(safetyRunnable, 2_000L);
+    }
+
+    private void stopAutomaticLightMonitoring() {
+        CanBusEventHub.Subscription subscription = canBusSubscription;
+        canBusSubscription = null;
+        if (subscription != null) subscription.close();
+        timerHandler.removeCallbacks(safetyRunnable);
+        timerHandler.removeCallbacks(forceInitRunnable);
+        timerHandler.removeCallbacks(sensorDebounceRunnable);
+        timerHandler.removeCallbacks(canbusReassertRunnable);
+        timerHandler.removeCallbacks(driveFallbackRunnable);
+        pendingMainSensorApply = null;
+        settingsRequestGate.clearPending();
+        Handler io = carSignalIoHandler;
+        if (io != null) io.post(() -> releaseCarSignalBindingOnIo("auto light disabled"));
     }
 
     @Override
@@ -1122,6 +1192,9 @@ public class LightSensorService extends Service {
         CanBusEventHub.Subscription subscription = canBusSubscription;
         canBusSubscription = null;
         if (subscription != null) subscription.close();
+        GearStateController.Subscription gearSubscription = gearStateSubscription;
+        gearStateSubscription = null;
+        if (gearSubscription != null) gearSubscription.close();
         try { unregisterReceiver(requestReceiver); } catch (Exception ignored) {}
         timerHandler.removeCallbacks(safetyRunnable);
         timerHandler.removeCallbacks(forceInitRunnable);
@@ -1303,6 +1376,10 @@ public class LightSensorService extends Service {
     }
 
     private boolean commit(boolean targetOn, String reason) {
+        if (targetOn && headlightsOffInParking && lastGear == GEAR_PARKING) {
+            Log.i(TAG, "commit(" + reason + ") suppressed: parking headlight switch keeps light off");
+            return false;
+        }
         Log.i(TAG, "★ commit(" + (targetOn ? "ближний" : "выкл") + ") — " + reason);
         final long automaticToken = MANUAL_AUTO_GATE.beginAutomaticDecision();
         if (automaticToken == ManualAutoGate.INVALID_AUTOMATIC_TOKEN) {
@@ -1370,11 +1447,17 @@ public class LightSensorService extends Service {
      */
     private void onGear(int gearVal) {
         if (gearVal < 0 || gearVal == lastGear) return;
+        boolean toParking = (gearVal == GEAR_PARKING);
         boolean toDrive = (gearVal == GEAR_DRIVE);
         lastGear = gearVal;
+        timerHandler.removeCallbacks(driveFallbackRunnable);
+        if (toParking && headlightsOffInParking && (!everSent || headlightsOn)) {
+            commit(false, "gear=P; parking headlight switch");
+            return;
+        }
+        if (!autoLightEnabled) return;
         if (toDrive) {
             Log.i(TAG, "gear=Drive → через " + DRIVE_FALLBACK_MS + "мс выставим таргет (анти-Auto)");
-            timerHandler.removeCallbacks(driveFallbackRunnable);
             timerHandler.postDelayed(driveFallbackRunnable, DRIVE_FALLBACK_MS);
         }
     }
@@ -1383,6 +1466,7 @@ public class LightSensorService extends Service {
     private final Runnable driveFallbackRunnable = new Runnable() {
         @Override
         public void run() {
+            if (!autoLightEnabled) return;
             if (MANUAL_AUTO_GATE.blocksAntiAuto()) {
                 Log.i(TAG, "drive+5s: OEM Auto выбран с руля — anti-Auto пропущен");
                 return;
