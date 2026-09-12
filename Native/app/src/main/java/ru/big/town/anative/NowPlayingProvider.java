@@ -73,17 +73,18 @@ public class NowPlayingProvider extends ContentProvider {
             return sources;
         }
         MatrixCursor c = new MatrixCursor(COLUMNS);
+        NowPlayingService.Snapshot snapshot = NowPlayingService.sSnapshot;
         c.addRow(new Object[]{
-                NowPlayingService.sTitle,
-                NowPlayingService.sArtist,
-                NowPlayingService.sAlbum,
-                NowPlayingService.sPackage,
-                NowPlayingService.sAppLabel,
-                NowPlayingService.sState,
-                NowPlayingService.sPosition,
-                NowPlayingService.sDuration,
-                NowPlayingService.sHasArt ? 1 : 0,
-                NowPlayingService.sUpdatedAt,
+                snapshot.title,
+                snapshot.artist,
+                snapshot.album,
+                snapshot.packageName,
+                snapshot.appLabel,
+                snapshot.state,
+                snapshot.position,
+                snapshot.duration,
+                snapshot.hasArt ? 1 : 0,
+                snapshot.updatedAt,
         });
         return c;
     }

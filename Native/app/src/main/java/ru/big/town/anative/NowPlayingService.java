@@ -27,7 +27,9 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -66,6 +68,9 @@ public class NowPlayingService extends Service {
     public static final String ACTION_REQUEST_NOW_PLAYING = "ru.big.town.anative.REQUEST_NOW_PLAYING";
 
     private static final String ART_FILE_NAME = "nowplaying_art.png";
+    // All current consumers render the cover at 66–160 dp. Keeping a full-size artwork supplied
+    // by a player (often 2–4K) only increases the Native heap, PNG IO and cross-process decode.
+    private static final int MAX_ART_EDGE_PX = 512;
 
     // Legacy-маршрут для совместимости со старыми версиями steeringwheelkeys.js. Новый хук на каждое
     // initial DOWN синхронно вызывает NowPlayingProvider.media_command: там берётся СВЕЖИЙ список сессий,
@@ -83,7 +88,6 @@ public class NowPlayingService extends Service {
     private static final AtomicLong ROUTE_REVISION = new AtomicLong();
     private static final AtomicLong BROADCAST_REVISION = new AtomicLong();
     private static final Object INSTANCE_CALLBACK_LOCK = new Object();
-    private static final Object SNAPSHOT_COMMIT_LOCK = new Object();
     private static final Object ART_COMMIT_LOCK = new Object();
     private static final ThreadPoolExecutor ROUTE_EXECUTOR = newDeliveryExecutor("MediaRoute");
     private static final ThreadPoolExecutor BROADCAST_EXECUTOR =
@@ -136,20 +140,44 @@ public class NowPlayingService extends Service {
         }
     }
 
-    // Текущий снимок — читает NowPlayingProvider (тот же процесс). volatile: пишет наш handler-тред,
-    // читает binder-тред провайдера.
-    static volatile String sTitle = "";
-    static volatile String sArtist = "";
-    static volatile String sAlbum = "";
-    static volatile String sPackage = "";
-    static volatile String sAppLabel = "";
-    static volatile int  sState = PlaybackState.STATE_NONE;
-    static volatile long sPosition = 0L;
-    static volatile long sDuration = 0L;
-    static volatile boolean sHasArt = false;
-    static volatile long sUpdatedAt = 0L;
+    // The provider's Binder thread reads this object while the worker thread replaces it. One
+    // volatile reference gives every reader a coherent snapshot, unlike independent volatile
+    // fields which could otherwise mix title from one track with position from the next one.
+    static volatile Snapshot sSnapshot = Snapshot.empty();
     static volatile List<SourceSnapshot> sSources = Collections.emptyList();
     private static volatile NowPlayingService activeService;
+
+    static final class Snapshot {
+        final String title;
+        final String artist;
+        final String album;
+        final String packageName;
+        final String appLabel;
+        final int state;
+        final long position;
+        final long duration;
+        final boolean hasArt;
+        final long updatedAt;
+
+        Snapshot(String title, String artist, String album, String packageName, String appLabel,
+                 int state, long position, long duration, boolean hasArt, long updatedAt) {
+            this.title = nz(title);
+            this.artist = nz(artist);
+            this.album = nz(album);
+            this.packageName = nz(packageName);
+            this.appLabel = nz(appLabel);
+            this.state = state;
+            this.position = position;
+            this.duration = duration;
+            this.hasArt = hasArt;
+            this.updatedAt = updatedAt;
+        }
+
+        static Snapshot empty() {
+            return new Snapshot("", "", "", "", "", PlaybackState.STATE_NONE,
+                    0L, 0L, false, System.currentTimeMillis());
+        }
+    }
 
     /** One real active MediaSession exposed to source pickers in launcher and RestoreMode. */
     static final class SourceSnapshot {
@@ -193,6 +221,9 @@ public class NowPlayingService extends Service {
     // MediaSession disappears, so a paused second player is not immediately replaced by another
     // active session on the next callback.
     private String manuallySelectedPackage = "";
+    // PackageManager lookups are Binder calls and metadata/playback callbacks arrive often. Labels
+    // only change on package update, so a small service-lifetime cache removes this hot-path work.
+    private final Map<String, String> appLabelCache = new HashMap<>();
     private MediaController.Callback controllerCallback;
     private Bitmap lastWrittenArt;                   // тот же Bitmap не кодируем в PNG на каждый playback callback
 
@@ -371,7 +402,6 @@ public class NowPlayingService extends Service {
                         if (sameController(watchedController, current)) {
                             offerMediaRefresh(MediaRefreshDelivery.Work.PUBLISH, "metadata");
                         }
-                        offerMediaRefresh(MediaRefreshDelivery.Work.SOURCES, "metadata");
                     }
                     @Override public void onPlaybackStateChanged(PlaybackState state) {
                         if (!isActiveWatcher(generation, watcherEpoch)) return;
@@ -388,7 +418,6 @@ public class NowPlayingService extends Service {
                             // still needs current state/position for the selected controller.
                             offerMediaRefresh(MediaRefreshDelivery.Work.PUBLISH, "playback");
                         }
-                        offerMediaRefresh(MediaRefreshDelivery.Work.SOURCES, "playback");
                     }
                     @Override public void onSessionDestroyed() {
                         if (isActiveWatcher(generation, watcherEpoch)) {
@@ -588,12 +617,30 @@ public class NowPlayingService extends Service {
                 } catch (Exception ignored) {}
             }
         }
+        List<SourceSnapshot> previous = sSources;
         sSources = Collections.unmodifiableList(next);
+        // Source title/artist are refreshed in the provider for the next picker opening, but do
+        // not need a cross-process broadcast for every metadata tick. A notification is only
+        // useful when the selectable source topology or selected package changed.
+        if (sameSourceTopology(previous, next)) return;
         Intent update = new Intent(ACTION_NOW_PLAYING_SOURCES);
         update.putExtra("count", next.size());
         update.putExtra("updatedAt", System.currentTimeMillis());
         enqueueSnapshotBroadcast(update);
         Log.i(TAG, "publishSources(" + reason + "): " + next.size());
+    }
+
+    private static boolean sameSourceTopology(List<SourceSnapshot> before,
+                                              List<SourceSnapshot> after) {
+        if (before == after) return true;
+        if (before == null || after == null || before.size() != after.size()) return false;
+        for (int i = 0; i < before.size(); i++) {
+            SourceSnapshot a = before.get(i);
+            SourceSnapshot b = after.get(i);
+            if (!a.packageName.equals(b.packageName) || !a.appLabel.equals(b.appLabel)
+                    || a.selected != b.selected) return false;
+        }
+        return true;
     }
 
     /** Selects one package from the current active-session set. */
@@ -646,13 +693,9 @@ public class NowPlayingService extends Service {
                 if (ps != null) { state = ps.getState(); position = ps.getPosition(); }
             }
 
-            synchronized (SNAPSHOT_COMMIT_LOCK) {
-                if (!isActiveInstance()) return;
-                sTitle = title; sArtist = artist; sAlbum = album;
-                sPackage = pkg; sAppLabel = appLabel;
-                sState = state; sPosition = position; sDuration = duration; sHasArt = hasArt;
-                sUpdatedAt = System.currentTimeMillis();
-            }
+            if (!isActiveInstance()) return;
+            sSnapshot = new Snapshot(title, artist, album, pkg, appLabel, state, position,
+                    duration, hasArt, System.currentTimeMillis());
             enqueueSnapshotBroadcast(buildSnapshotIntent());
 
             Log.i(TAG, "publish(" + reason + "): [" + pkg + "] " + title + " — " + artist
@@ -663,37 +706,25 @@ public class NowPlayingService extends Service {
     }
 
     private void resetSnapshotForNewInstance() {
-        synchronized (SNAPSHOT_COMMIT_LOCK) {
-            sTitle = "";
-            sArtist = "";
-            sAlbum = "";
-            sPackage = "";
-            sAppLabel = "";
-            sState = PlaybackState.STATE_NONE;
-            sPosition = 0L;
-            sDuration = 0L;
-            sHasArt = false;
-            sUpdatedAt = System.currentTimeMillis();
-        }
+        sSnapshot = Snapshot.empty();
         sSources = Collections.emptyList();
     }
 
     private static Intent buildSnapshotIntent() {
-        synchronized (SNAPSHOT_COMMIT_LOCK) {
-            Intent intent = new Intent(ACTION_NOW_PLAYING);
-            intent.setPackage(null);
-            intent.putExtra("title", sTitle);
-            intent.putExtra("artist", sArtist);
-            intent.putExtra("album", sAlbum);
-            intent.putExtra("package", sPackage);
-            intent.putExtra("appLabel", sAppLabel);
-            intent.putExtra("state", sState);
-            intent.putExtra("position", sPosition);
-            intent.putExtra("duration", sDuration);
-            intent.putExtra("hasArt", sHasArt);
-            intent.putExtra("updatedAt", sUpdatedAt);
-            return intent;
-        }
+        Snapshot snapshot = sSnapshot;
+        Intent intent = new Intent(ACTION_NOW_PLAYING);
+        intent.setPackage(null);
+        intent.putExtra("title", snapshot.title);
+        intent.putExtra("artist", snapshot.artist);
+        intent.putExtra("album", snapshot.album);
+        intent.putExtra("package", snapshot.packageName);
+        intent.putExtra("appLabel", snapshot.appLabel);
+        intent.putExtra("state", snapshot.state);
+        intent.putExtra("position", snapshot.position);
+        intent.putExtra("duration", snapshot.duration);
+        intent.putExtra("hasArt", snapshot.hasArt);
+        intent.putExtra("updatedAt", snapshot.updatedAt);
+        return intent;
     }
 
     private void enqueueSnapshotBroadcast(Intent intent) {
@@ -728,8 +759,9 @@ public class NowPlayingService extends Service {
             return isActiveInstance();
         }
         File pending = new File(getFilesDir(), ART_FILE_NAME + "." + instanceGeneration + ".tmp");
+        Bitmap encoded = scaleArtForTransport(bmp);
         try (FileOutputStream fos = new FileOutputStream(pending)) {
-            boolean written = bmp.compress(Bitmap.CompressFormat.PNG, 100, fos);
+            boolean written = encoded.compress(Bitmap.CompressFormat.PNG, 100, fos);
             if (!written) {
                 pending.delete();
                 return false;
@@ -747,15 +779,40 @@ public class NowPlayingService extends Service {
             pending.delete();
             Log.w(TAG, "writeArt: " + e.getMessage());
             return false;
+        } finally {
+            // The scaled bitmap is ours. The original belongs to MediaMetadata and must not be
+            // recycled here because the framework/player may still retain it.
+            if (encoded != bmp && !encoded.isRecycled()) encoded.recycle();
+        }
+    }
+
+    private static Bitmap scaleArtForTransport(Bitmap source) {
+        int width = source.getWidth();
+        int height = source.getHeight();
+        int edge = Math.max(width, height);
+        if (edge <= MAX_ART_EDGE_PX || edge <= 0) return source;
+        float scale = (float) MAX_ART_EDGE_PX / edge;
+        int targetWidth = Math.max(1, Math.round(width * scale));
+        int targetHeight = Math.max(1, Math.round(height * scale));
+        try {
+            return Bitmap.createScaledBitmap(source, targetWidth, targetHeight, true);
+        } catch (Exception ignored) {
+            // A malformed/hardware Bitmap should never prevent the metadata update.
+            return source;
         }
     }
 
     private String appLabel(String pkg) {
         if (pkg == null || pkg.isEmpty()) return "";
+        String cached = appLabelCache.get(pkg);
+        if (cached != null) return cached;
+        String label = pkg;
         try {
             android.content.pm.PackageManager pm = getPackageManager();
-            return pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString();
-        } catch (Exception e) { return pkg; }
+            label = pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString();
+        } catch (Exception ignored) {}
+        appLabelCache.put(pkg, label);
+        return label;
     }
 
     private static String nz(String s) { return s == null ? "" : s; }

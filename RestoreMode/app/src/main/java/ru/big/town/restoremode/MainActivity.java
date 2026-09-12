@@ -35,6 +35,9 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 import java.util.Locale;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 
 public class MainActivity extends AppCompatActivity {
@@ -100,6 +103,14 @@ public class MainActivity extends AppCompatActivity {
     private android.widget.ProgressBar nowPlayingProgress;
     private long nowPlayingArtGeneration;
     private String nowPlayingArtKey = "";
+    // At most one obsolete cover may wait behind the current decode. This avoids unbounded thread
+    // creation/queues when a player publishes several metadata updates in a short burst.
+    private final ThreadPoolExecutor nowPlayingArtExecutor = new ThreadPoolExecutor(
+            1, 1, 15L, TimeUnit.SECONDS, new ArrayBlockingQueue<>(1), runnable -> {
+                Thread thread = new Thread(runnable, "VoyahTune-now-playing-art");
+                thread.setDaemon(true);
+                return thread;
+            }, new ThreadPoolExecutor.DiscardOldestPolicy());
     private boolean tripActive = false, tripInDrive = false;
     private long tripAccumMs = 0L, tripDriveStartElapsed = 0L;
     private String lastTripsJson = "[]"; // снимок лога для экрана истории
@@ -635,6 +646,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        nowPlayingArtExecutor.allowCoreThreadTimeOut(true);
 
         bindToMessengerService();
 
@@ -883,14 +895,14 @@ public class MainActivity extends AppCompatActivity {
             }
             nowPlayingArtKey = artKey;
             final long generation = ++nowPlayingArtGeneration;
-            new Thread(() -> {
+            nowPlayingArtExecutor.execute(() -> {
                 android.graphics.Bitmap bitmap = NowPlayingClient.loadArt(this);
                 runOnUiThread(() -> {
                     if (generation == nowPlayingArtGeneration && nowPlayingArt != null) {
                         nowPlayingArt.setImageBitmap(bitmap);
                     }
                 });
-            }, "VoyahTune-now-playing-art").start();
+            });
         }
         applyMainScreenVisibility();
     }
@@ -1086,6 +1098,7 @@ public class MainActivity extends AppCompatActivity {
     protected void onDestroy() {
         destroyed = true;
         uiHandler.removeCallbacks(tripTick);
+        nowPlayingArtExecutor.shutdownNow();
         releaseMessengerBinding("onDestroy");
         super.onDestroy();
     }

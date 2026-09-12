@@ -27,3 +27,10 @@
 #-dontobfuscate
 #-dontoptimize
 -dontwarn javax.lang.model.element.Modifier
+
+# XML onClick handlers are resolved by name at runtime, outside normal Java call graphs.
+-keepclassmembers class * {
+    public void *(android.view.View);
+}
+
+-keepattributes RuntimeVisibleAnnotations,RuntimeInvisibleAnnotations,AnnotationDefault,InnerClasses,EnclosingMethod

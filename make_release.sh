@@ -388,6 +388,9 @@ verify_release_payload() {
     sh -n "$out/install.sh"
     sh -n "$out/install-yandex-dns.sh"
     sh -n "$out/remove.sh"
+    if command -v node >/dev/null 2>&1 && [ "$flavor" = full ]; then
+        for hook in "$out/"*.js; do node --check "$hook"; done
+    fi
 }
 
 # Собрать APK одного флейвора и положить в папку релиза под финальными именами.
@@ -516,6 +519,10 @@ if [ "$DO_FULL" = 1 ]; then
     cp "$COMMON/inject/"*.js                                "$STAGE/"
     cp "$COMMON/inject/"*.json                              "$STAGE/"
     cp "$COMMON/system/"*                                   "$STAGE/"
+    # Sources in Packaging/inject stay reviewable. Only the deployed staging copy is compacted;
+    # manifest integrity must therefore be generated after this transformation.
+    "$COMMON/minify_inject_scripts.sh" "$STAGE"
+    "$COMMON/update_hook_manifest.sh" "$STAGE" "$STAGE/voyahtune-hook-manifest.json"
     copy_common_release_assets "$STAGE"
     for f in "$COMMON/installer/full/"*; do
         copy_stamped "$f" "$STAGE/$(basename "$f")"

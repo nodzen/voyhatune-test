@@ -16,8 +16,6 @@ Java.perform(function () {
     var ActivityThread = Java.use("android.app.ActivityThread");
     var SettingsGlobal = Java.use("android.provider.Settings$Global");
     var System = Java.use("java.lang.System");
-    var Handler = Java.use("android.os.Handler");
-    var Looper = Java.use("android.os.Looper");
     var BroadcastReceiver = Java.use("android.content.BroadcastReceiver");
     var IntentFilter = Java.use("android.content.IntentFilter");
     var ViewGroup = Java.use("android.view.ViewGroup");
@@ -31,11 +29,12 @@ Java.perform(function () {
     var app = ActivityThread.currentApplication();
     var screenHooked = false;
     var receiverRegistered = false;
-    var activeActivity = null;
     var panels = {};
     var updatePending = false;
     var timer = null;
     var clickListener = null;
+    var latestInfo = null;
+    var instrumentEnabled = true;
 
     function log(message) { try { Java.use("android.util.Log").i(TAG, message); } catch (e) {} }
     function warn(message) { try { Java.use("android.util.Log").w(TAG, message); } catch (e) {} }
@@ -48,11 +47,11 @@ Java.perform(function () {
         try { return Math.max(1, Math.round(value * app.getResources().getDisplayMetrics().density)); }
         catch (e) { return Math.max(1, Math.round(value)); }
     }
-    function enabled() {
+    function refreshEnabled() {
         try {
             var value = SettingsGlobal.getString(app.getContentResolver(), SETTINGS_KEY);
-            return value === null || text(value) !== "0";
-        } catch (e) { return true; }
+            instrumentEnabled = value === null || text(value) !== "0";
+        } catch (e) { instrumentEnabled = true; }
     }
     function column(cursor, name) {
         try {
@@ -67,8 +66,8 @@ Java.perform(function () {
         } catch (e) { return 0; }
     }
     function snapshot() {
-        var result = {title: "", artist: "", pkg: "", app: "", position: 0, duration: 0,
-            hasArt: false, updatedAt: 0};
+        var result = {title: "", artist: "", pkg: "", app: "", state: 0, position: 0,
+            duration: 0, hasArt: false, updatedAt: 0};
         var cursor = null;
         try {
             cursor = app.getContentResolver().query(mediaUri, null, null, null, null);
@@ -77,6 +76,7 @@ Java.perform(function () {
                 result.artist = column(cursor, "artist");
                 result.pkg = column(cursor, "package");
                 result.app = column(cursor, "appLabel");
+                result.state = number(cursor, "state");
                 result.position = number(cursor, "position");
                 result.duration = number(cursor, "duration");
                 result.hasArt = number(cursor, "hasArt") === 1;
@@ -85,6 +85,16 @@ Java.perform(function () {
         } catch (e) { warn("snapshot query failed: " + e); }
         finally { try { if (cursor !== null) cursor.close(); } catch (ignored) {} }
         return result;
+    }
+    function snapshotFromIntent(intent) {
+        if (intent === null || intent === undefined) return null;
+        return {title: text(intent.getStringExtra("title")), artist: text(intent.getStringExtra("artist")),
+            pkg: text(intent.getStringExtra("package")), app: text(intent.getStringExtra("appLabel")),
+            state: Number(intent.getIntExtra("state", 0)),
+            position: Number(intent.getLongExtra("position", 0)),
+            duration: Number(intent.getLongExtra("duration", 0)),
+            hasArt: intent.getBooleanExtra("hasArt", false),
+            updatedAt: Number(intent.getLongExtra("updatedAt", 0))};
     }
     function formatTime(milliseconds) {
         var seconds = Math.max(0, Math.floor(Number(milliseconds || 0) / 1000));
@@ -109,7 +119,6 @@ Java.perform(function () {
         if (activity === null) return;
         try {
             var activityKey = "" + Number(System.identityHashCode(activity));
-            activeActivity = Java.retain(activity);
             Java.scheduleOnMainThread(function () {
                 try {
                     var decor = activity.getWindow().getDecorView();
@@ -208,9 +217,43 @@ Java.perform(function () {
             });
         } catch (e) { warn("activity retain failed: " + e); }
     }
-    function updatePanels() {
-        var info = snapshot();
-        var show = enabled() && !!info.pkg && !!info.title;
+    function releaseRetained(value) {
+        try { if (value !== null && value !== undefined) value.$dispose(); } catch (ignored) {}
+    }
+    function releasePanel(key) {
+        var view = panels[key];
+        if (!view) return;
+        releaseRetained(view.panel);
+        releaseRetained(view.cover);
+        releaseRetained(view.title);
+        releaseRetained(view.artist);
+        releaseRetained(view.timeline);
+        releaseRetained(view.progress);
+        delete panels[key];
+    }
+    function stopTimer() {
+        if (timer !== null) clearTimeout(timer);
+        timer = null;
+    }
+    function scheduleTimeline(show, info) {
+        stopTimer();
+        // PlaybackState.STATE_PLAYING is 3. Position is extrapolated from updatedAt, therefore
+        // no Provider/Binder query is needed for every visual second of the timeline.
+        if (!show || !info || info.state !== 3 || !info.duration) return;
+        timer = setTimeout(function () {
+            timer = null;
+            scheduleUpdate();
+        }, 1000);
+    }
+    function updatePanels(info) {
+        if (info !== null && info !== undefined) latestInfo = info;
+        if (latestInfo === null) latestInfo = snapshot();
+        info = latestInfo;
+        var show = instrumentEnabled && Object.keys(panels).length > 0 && !!info.pkg && !!info.title;
+        var position = Number(info.position || 0);
+        if (show && info.state === 3 && info.updatedAt > 0) {
+            position = Math.min(Number(info.duration || 0), position + Math.max(0, Date.now() - info.updatedAt));
+        }
         Object.keys(panels).forEach(function (key) {
             var view = panels[key];
             try {
@@ -218,8 +261,8 @@ Java.perform(function () {
                 if (!show) return;
                 view.title.setText(info.title);
                 view.artist.setText(info.artist || info.app || info.pkg);
-                view.timeline.setText(formatTime(info.position) + " / " + formatTime(info.duration));
-                if (view.progress !== null) view.progress.setProgress(progressOf(info));
+                view.timeline.setText(formatTime(position) + " / " + formatTime(info.duration));
+                if (view.progress !== null) view.progress.setProgress(progressOf({position: position, duration: info.duration}));
                 var artKey = info.pkg + "|" + info.title;
                 if (info.hasArt && artKey !== view.artKey) {
                     view.artKey = artKey;
@@ -231,20 +274,16 @@ Java.perform(function () {
                 }
             } catch (e) { warn("panel update failed: " + e); }
         });
+        scheduleTimeline(show, info);
     }
-    function scheduleUpdate() {
+    function scheduleUpdate(info) {
+        if (info !== null && info !== undefined) latestInfo = info;
         if (updatePending) return;
         updatePending = true;
         setTimeout(function () {
             updatePending = false;
-            try { Java.scheduleOnMainThread(updatePanels); } catch (e) {}
+            try { Java.scheduleOnMainThread(function () { updatePanels(latestInfo); }); } catch (e) {}
         }, 100);
-    }
-    function startTimer() {
-        if (timer !== null) return;
-        timer = setInterval(function () {
-            if (activeActivity !== null) scheduleUpdate();
-        }, 1000);
     }
     function registerUpdates() {
         if (receiverRegistered || app === null) return;
@@ -256,7 +295,14 @@ Java.perform(function () {
                     onReceive: {
                         returnType: "void",
                         argumentTypes: ["android.content.Context", "android.content.Intent"],
-                        implementation: function (context, intent) { scheduleUpdate(); }
+                            implementation: function (context, intent) {
+                                var action = text(intent === null ? null : intent.getAction());
+                                if (action === NOW_PLAYING) scheduleUpdate(snapshotFromIntent(intent));
+                                else {
+                                    refreshEnabled();
+                                    scheduleUpdate();
+                                }
+                            }
                     }
                 }
             });
@@ -300,10 +346,8 @@ Java.perform(function () {
                 overload.implementation = function () {
                     try {
                         var key = "" + Number(System.identityHashCode(this));
-                        delete panels[key];
-                        if (activeActivity !== null && Number(System.identityHashCode(activeActivity)) === Number(key)) {
-                            activeActivity = null;
-                        }
+                        releasePanel(key);
+                        if (Object.keys(panels).length === 0) stopTimer();
                     } catch (e) {}
                     return overload.apply(this, arguments);
                 };
@@ -324,8 +368,8 @@ Java.perform(function () {
         return;
     }
     registerUpdates();
+    refreshEnabled();
     hookScreenActivity();
-    startTimer();
     function retryScreenHook() {
         if (screenHooked) return;
         try { Java.perform(function () { hookScreenActivity(); }); } catch (e) {}

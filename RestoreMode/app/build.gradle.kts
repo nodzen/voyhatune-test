@@ -21,11 +21,9 @@ android {
 
     buildTypes {
         release {
-            // Enables code-related app optimization.
-            isMinifyEnabled = false
-
-            // Enables resource shrinking.
-            isShrinkResources = false
+            // Release packages are installed on the head unit; run R8 here, not only in debug.
+            isMinifyEnabled = true
+            isShrinkResources = true
 
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -35,11 +33,10 @@ android {
 
         }
         debug {
-            // Enables code-related app optimization.
-            isMinifyEnabled = true
-
-            // Enables resource shrinking.
-            isShrinkResources = true
+            // Keep diagnostics and local iteration debuggable. Size optimization belongs to
+            // release, where the full/light packaging checks exercise the output.
+            isMinifyEnabled = false
+            isShrinkResources = false
 
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

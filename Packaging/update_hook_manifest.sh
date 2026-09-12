@@ -1,12 +1,23 @@
 #!/bin/sh
-# Regenerates the tracked hook manifest from the exact Frida sources.
+# Regenerates a hook manifest from exact Frida files. With no arguments it updates the tracked
+# source manifest; with INJECT_DIRECTORY TARGET it is also used for compact release staging files.
 # The output is staged in the same directory and atomically renamed so a failed generation cannot
-# leave a truncated manifest. Run this after changing any injected script, then review the diff.
+# leave a truncated manifest.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
-INJECT="$ROOT/Packaging/inject"
-TARGET="$ROOT/Packaging/system/voyahtune-hook-manifest.json"
+if [ "$#" -eq 0 ]; then
+    INJECT="$ROOT/Packaging/inject"
+    TARGET="$ROOT/Packaging/system/voyahtune-hook-manifest.json"
+elif [ "$#" -eq 2 ]; then
+    INJECT=$1
+    TARGET=$2
+else
+    echo "usage: update_hook_manifest.sh [INJECT_DIRECTORY TARGET]" >&2
+    exit 1
+fi
+[ -d "$INJECT" ] || { echo "Inject directory does not exist: $INJECT" >&2; exit 1; }
+mkdir -p "$(dirname "$TARGET")"
 STAGE="$TARGET.$$.new"
 
 cleanup() { rm -f "$STAGE"; }

@@ -18,6 +18,11 @@ Releases/dist/VoyahTune-3.8.4-light.zip
 
 Флаги: `--full-only`, `--light-only`, `--no-build`, `--no-zip`.
 
+Для full-релиза нужен Node.js с `npx`: исходники Frida-агентов в `inject/` остаются читаемыми,
+а `make_release.sh` собирает их в компактные файлы только внутри staging-папки. После минификации
+manifest пересчитывается от фактических файлов релиза, поэтому проверка целостности установщика
+сохраняется. Light не требует Node.js.
+
 ## Состав
 
 `full` содержит Frida-перехваты для руля, VirtualDisplay, launcher, multidisplay, полноэкранных

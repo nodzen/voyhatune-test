@@ -1890,7 +1890,6 @@ Java.perform(function () {
                     "content://ru.big.town.anative.nowplaying/sources");
             var mediaArtUri = Java.use("android.net.Uri").parse(
                     "content://ru.big.town.anative.nowplaying/art");
-            var MediaCursor = Java.use("android.database.Cursor");
             var ViewGroupMedia = Java.use("android.view.ViewGroup");
             var FrameLayoutMedia = Java.use("android.widget.FrameLayout");
             var LinearLayoutMedia = Java.use("android.widget.LinearLayout");
@@ -1899,12 +1898,9 @@ Java.perform(function () {
             var ButtonMedia = Java.use("android.widget.Button");
             var ProgressBarMedia = Java.use("android.widget.ProgressBar");
             var BitmapFactoryMedia = Java.use("android.graphics.BitmapFactory");
-            var HandlerMedia = Java.use("android.os.Handler");
-            var LooperMedia = Java.use("android.os.Looper");
+            var BitmapFactoryOptionsMedia = Java.use("android.graphics.BitmapFactory$Options");
             var BroadcastReceiverMedia = Java.use("android.content.BroadcastReceiver");
             var IntentFilterMedia = Java.use("android.content.IntentFilter");
-            var mainHandlerMedia = HandlerMedia.$new(LooperMedia.getMainLooper());
-            var mediaCards = {};
             var mediaOverlays = {};
             var mediaSources = [];
             var mediaSnapshot = null;
@@ -1989,13 +1985,45 @@ Java.perform(function () {
             }
 
             function mediaLoadArt() {
+                var bounds = BitmapFactoryOptionsMedia.$new();
+                bounds.inJustDecodeBounds.value = true;
                 try {
                     var stream = ctx().getContentResolver().openInputStream(mediaArtUri);
                     if (stream === null) return null;
-                    var bitmap = BitmapFactoryMedia.decodeStream(stream);
+                    BitmapFactoryMedia.decodeStream(stream, null, bounds);
                     stream.close();
-                    return bitmap;
                 } catch (e) { return null; }
+                var edge = Math.max(Number(bounds.outWidth.value), Number(bounds.outHeight.value));
+                if (!(edge > 0)) return null;
+                var options = BitmapFactoryOptionsMedia.$new();
+                var sample = 1;
+                // The dock cover is 66 dp; 192 px retains a sharp image without retaining a
+                // 512 px Bitmap in every recreated OEM media card.
+                while (edge / (sample * 2) >= 192) sample *= 2;
+                options.inSampleSize.value = sample;
+                try {
+                    var decoded = ctx().getContentResolver().openInputStream(mediaArtUri);
+                    if (decoded === null) return null;
+                    var bitmap = BitmapFactoryMedia.decodeStream(decoded, null, options);
+                    decoded.close();
+                    return bitmap;
+                } catch (e2) { return null; }
+            }
+
+            function mediaRelease(value) {
+                try { if (value !== null && value !== undefined) value.$dispose(); } catch (ignored) {}
+            }
+
+            function mediaReleaseOverlay(key) {
+                var view = mediaOverlays[key];
+                if (!view) return;
+                mediaRelease(view.overlay);
+                mediaRelease(view.cover);
+                mediaRelease(view.title);
+                mediaRelease(view.artist);
+                mediaRelease(view.progress);
+                mediaRelease(view.source);
+                delete mediaOverlays[key];
             }
 
             function mediaAttachCard(card) {
@@ -2003,7 +2031,6 @@ Java.perform(function () {
                 try {
                     var retainedCard = Java.retain(card);
                     var key = "" + Number(Java.use("java.lang.System").identityHashCode(retainedCard));
-                    mediaCards[key] = retainedCard;
                     Java.scheduleOnMainThread(function () {
                         try {
                             if (mediaOverlays[key]) return;
@@ -2080,6 +2107,7 @@ Java.perform(function () {
                                 source: Java.retain(sourceButton), artKey: ""};
                             updateMediaOverlays();
                         } catch (e) { Log.w(TAG, "[media] card attach failed: " + e); }
+                        finally { mediaRelease(retainedCard); }
                     });
                 } catch (e) { Log.w(TAG, "[media] card retain failed: " + e); }
             }
@@ -2135,6 +2163,10 @@ Java.perform(function () {
                 Object.keys(mediaOverlays).forEach(function (key) {
                     var view = mediaOverlays[key];
                     try {
+                        if (view.overlay.getParent() === null) {
+                            mediaReleaseOverlay(key);
+                            return;
+                        }
                         view.overlay.setVisibility(show ? 0 : 8);
                         if (!show) return;
                         view.title.setText(snapshot.title);
@@ -2272,7 +2304,10 @@ Java.perform(function () {
                                 var snapshot = action === "ru.big.town.anative.NOW_PLAYING"
                                         ? snapshotFromMediaIntent(intent) : null;
                                 scheduleMediaUpdate(snapshot);
-                                installHomeWidgetHooks();
+                                // Class enumeration is expensive in the launcher process. Widget
+                                // hooks are installed during bounded startup retries and on a
+                                // configuration reload, never on every MediaSession callback.
+                                if (action === RELOAD_ACT) installHomeWidgetHooks();
                             }
                         }
                     }

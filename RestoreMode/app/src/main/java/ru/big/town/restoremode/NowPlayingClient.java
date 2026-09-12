@@ -149,16 +149,38 @@ public final class NowPlayingClient {
         return np;
     }
 
-    /** Подгружает обложку из провайдера Native. null, если обложки нет. */
+    /** Подгружает обложку из провайдера Native для обычной карточки UI. */
     public static Bitmap loadArt(Context ctx) {
-        InputStream is = null;
-        try {
-            is = ctx.getContentResolver().openInputStream(ART_URI);
-            return (is != null) ? BitmapFactory.decodeStream(is) : null;
-        } catch (Exception e) {
+        return loadArt(ctx, 384);
+    }
+
+    /**
+     * Decodes only the resolution requested by a consumer. Album art is received over Binder and
+     * may originate from an arbitrary player, so decoding an original 2–4K image for a 66 dp card
+     * is avoidable heap pressure.
+     */
+    public static Bitmap loadArt(Context ctx, int maxEdgePx) {
+        if (ctx == null) return null;
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        try (InputStream is = ctx.getContentResolver().openInputStream(ART_URI)) {
+            if (is == null) return null;
+            BitmapFactory.decodeStream(is, null, bounds);
+        } catch (Exception ignored) {
             return null;
-        } finally {
-            if (is != null) try { is.close(); } catch (Exception ignored) {}
+        }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null;
+
+        int requested = Math.max(1, maxEdgePx);
+        int sample = 1;
+        int edge = Math.max(bounds.outWidth, bounds.outHeight);
+        while (edge / (sample * 2) >= requested) sample *= 2;
+        BitmapFactory.Options decode = new BitmapFactory.Options();
+        decode.inSampleSize = sample;
+        try (InputStream is = ctx.getContentResolver().openInputStream(ART_URI)) {
+            return is == null ? null : BitmapFactory.decodeStream(is, null, decode);
+        } catch (Exception ignored) {
+            return null;
         }
     }
 
