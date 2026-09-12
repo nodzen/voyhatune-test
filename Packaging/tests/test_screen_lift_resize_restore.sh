@@ -42,10 +42,15 @@ surface_line=$(grep -nF 'setupSurface(left);' "$HOST" | head -1 | cut -d: -f1)
 [ "$read_line" -lt "$surface_line" ] \
     || fail "new split reads the lift state after creating its Surface/VD"
 require_fixed "$HOST" 'private static final String ACTION_SCREEN_LIFT_CHANGED = "action.qg.layout.changed";'
+require_fixed "$HOST" 'private static final String ACTION_VD_RESIZED = "ru.big.town.anative.VD_RESIZED";'
 require_fixed "$HOST" 'int actualType = readScreenLiftProperty(type);'
 require_fixed "$HOST" 'if (actualType != type) {'
 require_fixed "$HOST" 'applyScreenLiftSize(type);'
 require_fixed "$HOST" 'pane.vd.resize(width, height, effectiveDpi(pane));'
+require_fixed "$HOST" 'else if (sizeChanged) {'
+require_fixed "$HOST" 'notifyPaneResized(pane);'
+require_fixed "$HOST" 'intent.setPackage(pane.pkg);'
+require_fixed "$HOST" 'sendBroadcast(intent, VD_RESIZE_PERMISSION);'
 require_fixed "$HOST" 'unregisterReceiver(screenLiftReceiver);'
 
 # Interactive resize is explicitly opt-out at two levels: a global safety switch and the per-preset

@@ -24,6 +24,7 @@ Java.perform(function () {
     var SETTING = "voyahtune_fullscreen_apps";
     var DPI_SETTING_PREFIX = "voyahtune_dpi_";
     var RELOAD_ACTION = "ru.big.town.anative.WIN_RELOAD";
+    var VD_RESIZED_ACTION = "ru.big.town.anative.VD_RESIZED";
     var RELOAD_PERMISSION = "android.permission.WRITE_SECURE_SETTINGS";
     var TYPE_BASE_APPLICATION = 1;
     var MATCH_PARENT = -1;
@@ -69,6 +70,10 @@ Java.perform(function () {
     var reloadReceiver = null;
     var mainHandler = Handler.$new(Looper.getMainLooper());
     var originalWidths = {};
+    // WindowManager may echo the old fixed width on every layout pass. Remember the request so
+    // that the expensive WindowManagerGlobal replay is only queued once per distinct width; the
+    // current setLayoutParams call is still normalized on every pass.
+    var normalizedRequestWidths = {};
     var replayApplying = false;
     var replayScheduled = false;
     var MapWindow = null;
@@ -78,6 +83,13 @@ Java.perform(function () {
     var mapkitHooksInstalled = false;
     var mapkitReadyAnnounced = false;
     var mapkitReplayScheduled = false;
+    var mapkitReplayPending = false;
+    var mapkitReplayPendingReason = "";
+    var mapkitReplayTimer = null;
+    var mapkitResizeReplayGeneration = 0;
+    var mapkitResizeReplaySettledTimer = null;
+    var mapkitPolicyGeneration = 0;
+    var mapViewAppliedGeneration = Object.create(null);
     var mapkitApplying = 0;
     var mapWindowBaselines = Object.create(null);
     var hookedMapWindowClasses = Object.create(null);
@@ -200,6 +212,20 @@ Java.perform(function () {
         }
     }
 
+    function mapViewKey(mapView) {
+        try { return "view:" + Number(System.identityHashCode(mapView)); }
+        catch (ignored) { return null; }
+    }
+
+    function applyMapWindowForMapView(mapView, windowObject, reason, force) {
+        var key = mapViewKey(mapView);
+        var generation = mapkitPolicyGeneration + ":" + mapkitResizeReplayGeneration;
+        if (!force && key !== null && mapViewAppliedGeneration[key] === generation) return false;
+        var changed = applyMapWindow(windowObject, reason);
+        if (key !== null) mapViewAppliedGeneration[key] = generation;
+        return changed;
+    }
+
     function hookMapView() {
         if (mapViewGetter !== null) return true;
         try {
@@ -207,7 +233,9 @@ Java.perform(function () {
             mapViewGetter = MapViewClass.getMapWindow.overload();
             mapViewGetter.implementation = function () {
                 var windowObject = mapViewGetter.call(this);
-                applyMapWindow(windowObject, "MapView.getMapWindow");
+                // MapKit can ask for the same window from its gesture/render path many times per
+                // frame. Re-apply only after a policy or VirtualDisplay generation changes.
+                applyMapWindowForMapView(this, windowObject, "MapView.getMapWindow", false);
                 return windowObject;
             };
             Log.i(TAG, "MapKit MapView factory hook installed");
@@ -268,38 +296,89 @@ Java.perform(function () {
     }
 
     function replayMapWindows(reason) {
-        if (!mapkitPackage || !mapkitHooksInstalled || mapkitReplayScheduled) return;
+        if (!mapkitPackage || !mapkitHooksInstalled) return;
+        if (mapkitReplayScheduled) {
+            // A resize broadcast can arrive while a previous replay is walking the view tree. Keep
+            // the latest reason and run one more pass after the current one instead of dropping it.
+            mapkitReplayPending = true;
+            mapkitReplayPendingReason = reason;
+            return;
+        }
         mapkitReplayScheduled = true;
         Java.scheduleOnMainThread(function () {
-            mapkitReplayScheduled = false;
-            var matched = 0;
-            function visit(view) {
-                if (view === null) return;
-                try {
-                    if (MapViewClass !== null && MapViewClass.class.isInstance(view)) {
-                        var mapView = Java.cast(view, MapViewClass);
-                        if (applyMapWindow(mapViewGetter.call(mapView), reason)) matched++;
-                    }
-                    if (!ViewGroup.class.isInstance(view)) return;
-                    var group = Java.cast(view, ViewGroup);
-                    for (var childIndex = 0; childIndex < group.getChildCount(); childIndex++) {
-                        visit(group.getChildAt(childIndex));
-                    }
-                } catch (viewError) {
-                    Log.w(TAG, "MapKit view-tree replay skipped: " + viewError);
-                }
-            }
             try {
-                var views = WindowManagerGlobal.getInstance().getWindowViews();
-                for (var i = 0; i < views.size(); i++) {
-                    visit(Java.cast(views.get(i), View));
+                var matched = 0;
+                function visit(view) {
+                    if (view === null) return;
+                    try {
+                        if (MapViewClass !== null && MapViewClass.class.isInstance(view)) {
+                            var mapView = Java.cast(view, MapViewClass);
+                            if (applyMapWindowForMapView(mapView, mapViewGetter.call(mapView), reason,
+                                    true)) matched++;
+                            // VD.resize updates the display configuration asynchronously. Ask the
+                            // already-attached MapView to measure and redraw against the new bounds.
+                            mapView.requestLayout();
+                            mapView.invalidate();
+                        }
+                        if (!ViewGroup.class.isInstance(view)) return;
+                        var group = Java.cast(view, ViewGroup);
+                        for (var childIndex = 0; childIndex < group.getChildCount(); childIndex++) {
+                            visit(group.getChildAt(childIndex));
+                        }
+                    } catch (viewError) {
+                        Log.w(TAG, "MapKit view-tree replay skipped: " + viewError);
+                    }
                 }
-            } catch (rootError) {
-                Log.e(TAG, "MapKit root replay failed: " + rootError);
+                try {
+                    var views = WindowManagerGlobal.getInstance().getWindowViews();
+                    for (var i = 0; i < views.size(); i++) {
+                        visit(Java.cast(views.get(i), View));
+                    }
+                } catch (rootError) {
+                    Log.e(TAG, "MapKit root replay failed: " + rootError);
+                }
+                Log.i(TAG, "MapKit replay " + reason + " package=" + packageName
+                    + " dpi=" + mapkitDpi + " changed=" + matched);
+            } finally {
+                mapkitReplayScheduled = false;
+                if (mapkitReplayPending) {
+                    var pendingReason = mapkitReplayPendingReason;
+                    mapkitReplayPending = false;
+                    mapkitReplayPendingReason = "";
+                    replayMapWindows(pendingReason);
+                }
             }
-            Log.i(TAG, "MapKit replay " + reason + " package=" + packageName
-                + " dpi=" + mapkitDpi + " changed=" + matched);
         });
+    }
+
+    function scheduleMapkitReplay(reason, delayMs) {
+        if (!mapkitPackage || !mapkitHooksInstalled) return;
+        if (mapkitReplayTimer !== null) {
+            clearTimeout(mapkitReplayTimer);
+            mapkitReplayTimer = null;
+        }
+        mapkitReplayTimer = setTimeout(function () {
+            mapkitReplayTimer = null;
+            replayMapWindows(reason);
+        }, delayMs);
+    }
+
+    function scheduleMapkitResizeReplays() {
+        if (!mapkitPackage || !mapkitHooksInstalled) return;
+        mapkitResizeReplayGeneration++;
+        var generation = mapkitResizeReplayGeneration;
+        // The first pass catches the normal configuration update. The second pass handles MapKit
+        // builds that publish their renderer size one or two choreographer frames later.
+        scheduleMapkitReplay("VD_RESIZED", 180);
+        if (mapkitResizeReplaySettledTimer !== null) {
+            clearTimeout(mapkitResizeReplaySettledTimer);
+            mapkitResizeReplaySettledTimer = null;
+        }
+        mapkitResizeReplaySettledTimer = setTimeout(function () {
+            mapkitResizeReplaySettledTimer = null;
+            if (generation !== mapkitResizeReplayGeneration) return;
+            replayMapWindows("VD_RESIZED_SETTLED");
+        }, 650);
     }
 
     function displayIdOf(root) {
@@ -316,6 +395,15 @@ Java.perform(function () {
 
     function rootKey(root) {
         return "root:" + Number(System.identityHashCode(root));
+    }
+
+    function shouldReplayNormalizedRoot(root, attrs) {
+        var requestedWidth = Number(attrs.width.value);
+        if (requestedWidth === MATCH_PARENT) return false;
+        var key = rootKey(root);
+        if (normalizedRequestWidths[key] === requestedWidth) return false;
+        normalizedRequestWidths[key] = requestedWidth;
+        return true;
     }
 
     function rememberOriginalWidth(root, attrs) {
@@ -421,6 +509,8 @@ Java.perform(function () {
         var previousMapkitDpi = mapkitDpi;
         enabled = readEnabled();
         mapkitDpi = readMapkitDpi();
+        if (previous !== enabled) normalizedRequestWidths = {};
+        if (previousMapkitDpi !== mapkitDpi) mapkitPolicyGeneration++;
         Log.i(TAG, "policy " + reason + " package=" + packageName
             + " enabled=" + enabled + " changed=" + (previous !== enabled)
             + " mapkitDpi=" + mapkitDpi
@@ -442,8 +532,13 @@ Java.perform(function () {
                     argumentTypes: ["android.content.Context", "android.content.Intent"],
                     implementation: function (context, intent) {
                         try {
-                            if (intent !== null && ("" + intent.getAction()) === RELOAD_ACTION) {
+                            var action = intent === null ? "" : "" + intent.getAction();
+                            if (action === RELOAD_ACTION) {
                                 refreshPolicy("WIN_RELOAD");
+                            } else if (action === VD_RESIZED_ACTION) {
+                                Log.i(TAG, "VD resize received package=" + packageName
+                                    + " generation=" + intent.getLongExtra("generation", 0));
+                                scheduleMapkitResizeReplays();
                             }
                         } catch (e) {
                             Log.e(TAG, "WIN_RELOAD failed: " + e);
@@ -453,12 +548,14 @@ Java.perform(function () {
             }
         });
         reloadReceiver = Java.retain(Receiver.$new());
+        var reloadFilter = IntentFilter.$new(RELOAD_ACTION);
+        reloadFilter.addAction(VD_RESIZED_ACTION);
         application.registerReceiver.overload(
             "android.content.BroadcastReceiver",
             "android.content.IntentFilter",
             "java.lang.String",
             "android.os.Handler"
-        ).call(application, reloadReceiver, IntentFilter.$new(RELOAD_ACTION),
+        ).call(application, reloadReceiver, reloadFilter,
             RELOAD_PERMISSION, mainHandler);
     } catch (e) {
         Log.e(TAG, "WIN_RELOAD receiver registration failed: " + e);
@@ -468,7 +565,8 @@ Java.perform(function () {
 
     try {
         setView.implementation = function (view, attrs, panelParentView, userId) {
-            var shouldReplay = enabled && isBaseWindowOnPhysicalDisplay(this, attrs);
+            var shouldReplay = enabled && isBaseWindowOnPhysicalDisplay(this, attrs)
+                && shouldReplayNormalizedRoot(this, attrs);
             var result = setView.call(this, view, normalizedCopy(this, attrs),
                 panelParentView, userId);
             // WindowManagerGlobal assigns the app-owned attrs to DecorView before setView(). Replay
@@ -479,7 +577,7 @@ Java.perform(function () {
         setLayoutParams.implementation = function (attrs, newView) {
             var shouldReplay = enabled && !replayApplying
                 && isBaseWindowOnPhysicalDisplay(this, attrs)
-                && Number(attrs.width.value) !== MATCH_PARENT;
+                && shouldReplayNormalizedRoot(this, attrs);
             var result = setLayoutParams.call(this, normalizedCopy(this, attrs), newView);
             // WindowManagerGlobal has already copied app attrs onto DecorView before this hook.
             // Repair that client-owned copy on the next UI-loop turn as well.

@@ -49,6 +49,14 @@ for REQUIRED in \
         'Java.cast(views.get(i), View)' \
         'view.getViewRootImpl()' \
         'windowManager.updateViewLayout(view, copy);' \
+        'var normalizedRequestWidths = {};' \
+        'function shouldReplayNormalizedRoot(root, attrs)' \
+        'VD_RESIZED_ACTION' \
+        'reloadFilter.addAction(VD_RESIZED_ACTION);' \
+        'scheduleMapkitResizeReplays();' \
+        'mapkitReplayPendingReason' \
+        'mapView.requestLayout();' \
+        'mapView.invalidate();' \
         'if (shouldReplay) replayAttachedRoots("setLayoutParams");' \
         'var key = rootKey(root);' \
         'if (typeof originalWidths[key] !== "number")' \

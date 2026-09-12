@@ -36,6 +36,10 @@ for REQUIRED in \
         'typedWindow.setScaleFactor(target);' \
         'mapkitDpi > 0 ? mapkitScaleForDpi(mapkitDpi) : baseline' \
         'MapViewClass.getMapWindow.overload()' \
+        'var mapkitPolicyGeneration = 0;' \
+        'function applyMapWindowForMapView(mapView, windowObject, reason, force)' \
+        'mapViewAppliedGeneration[key] === generation' \
+        'mapkitResizeReplayGeneration' \
         'MapKitBinding.createMapWindow.overloads' \
         'MapViewClass.class.isInstance(view)' \
         'ViewGroup.class.isInstance(view)' \

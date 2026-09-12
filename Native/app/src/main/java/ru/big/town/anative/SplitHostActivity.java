@@ -66,6 +66,9 @@ public class SplitHostActivity extends Activity {
     private static final boolean DIVIDER_RESIZE_GESTURE_ENABLED = true;
 
     private static final String ACTION_SCREEN_LIFT_CHANGED = "action.qg.layout.changed";
+    /** Sent only to the app hosted by a pane after its VirtualDisplay accepted a new size. */
+    private static final String ACTION_VD_RESIZED = "ru.big.town.anative.VD_RESIZED";
+    private static final String VD_RESIZE_PERMISSION = "android.permission.WRITE_SECURE_SETTINGS";
     private static final String SCREEN_LIFT_SETTING = "voyahtune_screen_lift_type";
     private static final String SCREEN_LIFT_PROPERTY = "persist.qg.canbus.bcm_screenAutoLiftFdb";
     private static final int SCREEN_LIFT_DOWN = 1;
@@ -123,6 +126,7 @@ public class SplitHostActivity extends Activity {
         String pkg;
         int dpi;            // 0 = дефолт дисплея (приходит из per-app настройки RestoreMode)
         int w, h;
+        int vdWidth, vdHeight, vdDpi; // last dimensions successfully sent to VirtualDisplay
         long resizeVersion; // успешные vd.resize; нужен для снятия маски после реального layout обеих панелей
         boolean launched;
         boolean launchInFlight;
@@ -377,18 +381,26 @@ public class SplitHostActivity extends Activity {
 
             @Override
             public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+                int dpi = effectiveDpi(pane);
+                boolean sizeChanged = pane.vdWidth != width
+                        || pane.vdHeight != height
+                        || pane.vdDpi != dpi;
                 pane.w = width;
                 pane.h = height;
                 if (pane.vd == null) {
                     createVirtualDisplay(pane, holder.getSurface());
                     launchApp(pane);
-                } else {
+                } else if (sizeChanged) {
                     // Реальные окна ресайзятся ТОЛЬКО на отпускании делителя (endResizeMask меняет вес
                     // контейнера один раз) → ровно один surfaceChanged → один чистый vd.resize. Во время
                     // драга сюда не заходим (веса панелей не меняем, двигаем только оверлей-маску).
                     try {
                         pane.vd.resize(width, height, effectiveDpi(pane));
+                        pane.vdWidth = width;
+                        pane.vdHeight = height;
+                        pane.vdDpi = dpi;
                         pane.resizeVersion++;
+                        notifyPaneResized(pane);
                     } catch (Exception e) {
                         Log.w(TAG, "resize " + pane.side + " failed: " + e.getMessage());
                     }
@@ -425,6 +437,11 @@ public class SplitHostActivity extends Activity {
             } catch (Exception e2) {
                 Log.e(TAG, "VD " + pane.side + " fallback failed: " + e2.getMessage());
             }
+        }
+        if (pane.vd != null) {
+            pane.vdWidth = pane.w;
+            pane.vdHeight = pane.h;
+            pane.vdDpi = dpi;
         }
     }
 
@@ -582,6 +599,30 @@ public class SplitHostActivity extends Activity {
         return pane.dpi > 0 ? pane.dpi : defaultDpi;
     }
 
+    /**
+     * MapKit and a few OEM layout implementations publish their new viewport one or two frames
+     * after VirtualDisplay.resize(). Tell the hosted process which pane changed so its client hook
+     * can replay the map layout after that asynchronous configuration update.
+     */
+    private void notifyPaneResized(Pane pane) {
+        if (pane.pkg == null || pane.pkg.isEmpty()) return;
+        try {
+            Intent intent = new Intent(ACTION_VD_RESIZED);
+            intent.setPackage(pane.pkg);
+            intent.putExtra("width", pane.vdWidth);
+            intent.putExtra("height", pane.vdHeight);
+            intent.putExtra("dpi", pane.vdDpi);
+            intent.putExtra("generation", pane.resizeVersion);
+            intent.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
+            sendBroadcast(intent, VD_RESIZE_PERMISSION);
+            Log.i(TAG, "VD resize notified " + pane.side + " package=" + pane.pkg
+                    + " generation=" + pane.resizeVersion + " "
+                    + pane.vdWidth + "x" + pane.vdHeight + " dpi=" + pane.vdDpi);
+        } catch (Exception e) {
+            Log.w(TAG, "VD resize notify " + pane.side + " failed: " + e.getMessage());
+        }
+    }
+
     private void releasePane(Pane pane) {
         if (workGate != null) workGate.invalidatePane(paneIndex(pane));
         pane.launchInFlight = false;
@@ -594,6 +635,9 @@ public class SplitHostActivity extends Activity {
             try { pane.vd.release(); } catch (Exception ignored) {}
             pane.vd = null;
         }
+        pane.vdWidth = 0;
+        pane.vdHeight = 0;
+        pane.vdDpi = 0;
     }
 
     // -------------------------------------------------------------------------
