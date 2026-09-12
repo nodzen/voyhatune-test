@@ -1907,6 +1907,8 @@ Java.perform(function () {
             var ADAPTER_NAME = "com.pateo.voyah.mediaCard.home.activity.MediaSrcAdapter";
             var HOLDER_NAME = "com.pateo.voyah.mediaCard.home.activity.MediaSrcAdapter$MediaSrcHolder";
             var HOME_SOURCE_NAME = "com.pateo.voyah.mediaCard.home.activity.HomeSrcMediaActivity";
+            var HOME_BASE_VIEW_NAME = "com.pateo.voyah.mediaCard.home.view.HomeBaseView";
+            var BASE_MEDIA_VIEW_NAME = "com.qinggan.app.mediaCentre.view.BaseMediaView";
             var MEDIA_CONTROL_METHOD = "media_control";
             var UriMedia = Java.use("android.net.Uri");
             var mediaUri = UriMedia.parse("content://ru.big.town.anative.nowplaying");
@@ -1922,6 +1924,7 @@ Java.perform(function () {
             var widgetRewriteCache = {};
             var receiverRegistered = false;
             var managerHooked = false;
+            var nativeViewHooked = false;
             var sourceHooked = false;
             var homeHooked = false;
             var refreshPending = false;
@@ -2190,6 +2193,42 @@ Java.perform(function () {
                 } catch (e) { Log.w(TAG, "[media] manager hook " + name + " unavailable: " + e); }
             }
             function currentWecar() { return spotifyAvailable && spotifySelected; }
+            function addWecarToNativeViewList(list) {
+                // HomeBaseView filters WECAR_FLOW out when the optional OEM WeChat Music
+                // feature is disabled. Spotify uses that existing native media contract;
+                // let the OEM card accept it only for the selected Spotify MediaSession.
+                if (!currentWecar() || list === null || list === undefined) return;
+                var mediaEnum = freshMediaEnum("WECAR_FLOW");
+                if (mediaEnum === null) return;
+                try {
+                    if (!list.contains(mediaEnum)) list.add(mediaEnum);
+                } catch (e) { Log.w(TAG, "[media] native view media list update failed: " + e); }
+            }
+            function hookNativeViewList(className) {
+                try {
+                    var NativeView = Java.use(className);
+                    var getMediaEnums = NativeView.getMediaEnums.overload();
+                    getMediaEnums.implementation = function () {
+                        var list = getMediaEnums.call(this);
+                        addWecarToNativeViewList(list);
+                        return list;
+                    };
+                    return true;
+                } catch (e) {
+                    Log.w(TAG, "[media] native view hook unavailable " + className + ": " + e);
+                    return false;
+                }
+            }
+            function installNativeViewSupport() {
+                if (nativeViewHooked || !ensureMediaClasses()) return nativeViewHooked;
+                // HomeBaseView owns the central card; BaseMediaView covers the OEM validation
+                // path used by any other native media card in this process.
+                var homeViewHooked = hookNativeViewList(HOME_BASE_VIEW_NAME);
+                var baseViewHooked = hookNativeViewList(BASE_MEDIA_VIEW_NAME);
+                nativeViewHooked = homeViewHooked || baseViewHooked;
+                if (nativeViewHooked) Log.i(TAG, "[media] native WECAR view support installed");
+                return nativeViewHooked;
+            }
             function installManagerHooks() {
                 if (managerHooked || !ensureMediaClasses()) return false;
                 var manager = managerInstance();
@@ -2457,6 +2496,7 @@ Java.perform(function () {
                 spotifySelected = spotifyAvailable && selected;
                 if (!spotifySelected && wasSelected) clearNativeSelection();
                 installManagerHooks();
+                installNativeViewSupport();
                 installSourceHooks();
                 installHomeSourceHooks();
                 if (spotifySelected) pushNativeSnapshot();
@@ -2592,6 +2632,7 @@ Java.perform(function () {
 
             refreshMediaConfig();
             installManagerHooks();
+            installNativeViewSupport();
             installSourceHooks();
             installHomeSourceHooks();
             registerMediaReceiver();

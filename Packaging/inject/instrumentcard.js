@@ -10,6 +10,8 @@ Java.perform(function () {
     var ENUM_NAME = "com.qinggan.media.helper.MediaEnum";
     var INFO_NAME = "com.qinggan.media.helper.base.bean.QinMediaInfo";
     var MANAGER_NAME = "com.qinggan.app.mediaCentre.MediaManager";
+    var MUSIC_VIEW_NAME = "com.qinggan.cardview.panel.media.MusicBaseView";
+    var BASE_MEDIA_VIEW_NAME = "com.qinggan.app.mediaCentre.view.BaseMediaView";
     var MEDIA_CONTROL_METHOD = "media_control";
     var Uri = Java.use("android.net.Uri");
     var mediaUri = Uri.parse("content://ru.big.town.anative.nowplaying");
@@ -25,6 +27,7 @@ Java.perform(function () {
     var app = null;
     var receiverRegistered = false;
     var managerHooked = false;
+    var nativeViewHooked = false;
     var refreshPending = false;
     var spotifyAvailable = false;
     var spotifySelected = false;
@@ -274,6 +277,42 @@ Java.perform(function () {
         } catch (e) { warn("manager hook " + name + " unavailable: " + e); }
     }
     function currentWecar() { return spotifyAvailable && spotifySelected; }
+    function addWecarToNativeViewList(list) {
+        // The firmware exposes WECAR_FLOW only when its own WeChat Music option is enabled.
+        // Spotify is backed by that same native media contract, so make it visible to the OEM
+        // renderer only while Spotify is the selected real MediaSession source.
+        if (!currentWecar() || list === null || list === undefined) return;
+        var mediaEnum = freshMediaEnum("WECAR_FLOW");
+        if (mediaEnum === null) return;
+        try {
+            if (!list.contains(mediaEnum)) list.add(mediaEnum);
+        } catch (e) { warn("native view media list update failed: " + e); }
+    }
+    function hookNativeViewList(className) {
+        try {
+            var NativeView = Java.use(className);
+            var getMediaEnums = NativeView.getMediaEnums.overload();
+            getMediaEnums.implementation = function () {
+                var list = getMediaEnums.call(this);
+                addWecarToNativeViewList(list);
+                return list;
+            };
+            return true;
+        } catch (e) {
+            warn("native view hook unavailable " + className + ": " + e);
+            return false;
+        }
+    }
+    function installNativeViewSupport() {
+        if (nativeViewHooked || !ensureMediaClasses()) return nativeViewHooked;
+        // MusicBaseView is the actual cluster card. The base hook is a fallback for
+        // other OEM media cards that inherit the generic validation path.
+        var musicViewHooked = hookNativeViewList(MUSIC_VIEW_NAME);
+        var baseViewHooked = hookNativeViewList(BASE_MEDIA_VIEW_NAME);
+        nativeViewHooked = musicViewHooked || baseViewHooked;
+        if (nativeViewHooked) log("native WECAR view support installed");
+        return nativeViewHooked;
+    }
     function installManagerHooks() {
         if (managerHooked || !ensureMediaClasses()) return false;
         var manager = managerInstance();
@@ -389,6 +428,7 @@ Java.perform(function () {
         spotifySelected = spotifyAvailable && selected;
         if (!spotifySelected && wasSelected) clearNativeSelection();
         installManagerHooks();
+        installNativeViewSupport();
         if (spotifySelected) pushNativeSnapshot();
     }
     function scheduleRefresh() {
@@ -442,6 +482,7 @@ Java.perform(function () {
         }
         refreshState();
         installManagerHooks();
+        installNativeViewSupport();
         registerUpdates();
         if (!managerHooked) {
             setTimeout(function () { try { Java.perform(ensureReady); } catch (e) {} }, 1200);
