@@ -138,6 +138,20 @@ final class MediaControlRouter {
         }
     }
 
+    /**
+     * Pins a user-selected session until it disappears or another real active transition replaces
+     * it.  The OEM media widgets have their own source selector, so their Spotify alias must route
+     * transport commands to the same Android MediaSession even when Bluetooth is also active.
+     */
+    static void pinSource(MediaSession.Token token) {
+        if (token == null) return;
+        synchronized (TARGET_LOCK) {
+            stickyToken = token;
+            stickyPinned = true;
+            targetRevision++;
+        }
+    }
+
     static void activateObserverGeneration(long generation) {
         if (generation <= 0L) return;
         synchronized (TARGET_LOCK) {

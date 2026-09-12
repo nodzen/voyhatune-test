@@ -202,6 +202,11 @@ Java.perform(function () {
     var moveDockGeneration = 0;
     var schedulePhysicalDockRecovery = null;
     var physicalDockRecoveryTimer = null;
+    // installAllAppsHooks owns the actual list caches. The reload receiver is outside that
+    // function, so keep an explicit no-op until the optional All Apps ABI is resolved instead of
+    // reaching into block-local variables from the broadcast hot path.
+    var invalidateAllAppsCaches = function () {};
+    var reloadAllApps = function () {};
 
     function activeMoveDockGuard() {
         if (cfg("dockpin") === "0" || cfg("freeform") === "0") return null;
@@ -1076,6 +1081,12 @@ Java.perform(function () {
                 adapterMetadataByIdentity = {};
             }
 
+            invalidateAllAppsCaches = function () {
+                installedSnapshot = null;
+                syntheticStartByList = {};
+                clearAdapterMetadata();
+            };
+
             function adapterMetadata(adapter) {
                 var identity = adapterIdentity(adapter);
                 var cached = identity ? adapterMetadataByIdentity[identity] : null;
@@ -1346,12 +1357,15 @@ Java.perform(function () {
                 // getAllApps(0/1) проходят через хук выше, поэтому synthetic entries возвращаются до
                 // notify/setAllAppList открытых адаптеров. Не мутируем OEM-списки параллельно с reload.
                 var reloadData = Data.reload.overload();
+                reloadAllApps = function () {
+                    if (reloadData !== null && reloadData !== undefined) reloadData.call(Data);
+                };
 
                 function schedulePackageRefresh(action, packageName) {
                     // Инвалидация сразу: если UI запросит список до debounce, он уже получит
                     // свежий PackageManager snapshot. Штатный reload через 300 ms доведёт списки/UI до
                     // консистентного состояния. REMOVE+ADD при APK update схлопываются в один reload.
-                    installedSnapshot = null;
+                    invalidateAllAppsCaches();
                     invalidateIconCache(packageName);
                     if (packageRefreshTimer !== null) clearTimeout(packageRefreshTimer);
                     packageRefreshTimer = setTimeout(function () {
@@ -1845,14 +1859,12 @@ Java.perform(function () {
                                     // install/remove broadcast guaranteed on every OEM build. Invalidate
                                     // both caches explicitly so the next reload can add a restored app or
                                     // remove a newly frozen one immediately.
-                                    installedSnapshot = null;
-                                    syntheticStartByList = {};
-                                    clearAdapterMetadata();
+                                    invalidateAllAppsCaches();
                                     setTimeout(function () {
                                         Java.scheduleOnMainThread(function () {
                                             try {
-                                                if (reloadData !== null && reloadData !== undefined) {
-                                                    reloadData.call(Data);
+                                                if (reloadAllApps !== null && reloadAllApps !== undefined) {
+                                                    reloadAllApps();
                                                     Log.i(TAG, "[allapps] frozen-app blacklist reloaded");
                                                 }
                                             } catch (e) { Log.e(TAG, "[allapps] frozen-app reload failed: " + e); }
@@ -1880,73 +1892,159 @@ Java.perform(function () {
             Log.i(TAG, "[dock] reload receiver registered: " + RELOAD_ACT + " (sdk=" + sdk + ")");
         } catch (e) { Log.e(TAG, "[dock] receiver reg err: " + e); }
 
-        // The OEM media card accepts only its built-in MediaEnum list. Keep that list untouched and
-        // add a fail-open overlay fed by Native's real active MediaSession list. This makes third-party
-        // players selectable without pretending that every installed music APK is available.
+        // Feed Spotify into the OEM media model as the existing WECAR_FLOW source. The OEM keeps
+        // ownership of the card, source picker, cluster panel, layout, and touch handling.
+        // No custom view is attached to the Launcher window; all rendering stays in OEM views.
         function installMediaWidgetBridge() {
-            var mediaUri = Java.use("android.net.Uri").parse(
-                    "content://ru.big.town.anative.nowplaying");
-            var mediaSourcesUri = Java.use("android.net.Uri").parse(
-                    "content://ru.big.town.anative.nowplaying/sources");
-            var mediaArtUri = Java.use("android.net.Uri").parse(
-                    "content://ru.big.town.anative.nowplaying/art");
-            var ViewGroupMedia = Java.use("android.view.ViewGroup");
-            var FrameLayoutMedia = Java.use("android.widget.FrameLayout");
-            var LinearLayoutMedia = Java.use("android.widget.LinearLayout");
-            var ImageViewMedia = Java.use("android.widget.ImageView");
-            var TextViewMedia = Java.use("android.widget.TextView");
-            var ButtonMedia = Java.use("android.widget.Button");
-            var ProgressBarMedia = Java.use("android.widget.ProgressBar");
-            var BitmapFactoryMedia = Java.use("android.graphics.BitmapFactory");
-            var BitmapFactoryOptionsMedia = Java.use("android.graphics.BitmapFactory$Options");
+            var SPOTIFY = "com.spotify.music";
+            var NOW_PLAYING = "ru.big.town.anative.NOW_PLAYING";
+            var SOURCES = "ru.big.town.anative.NOW_PLAYING_SOURCES";
+            var ENUM_NAME = "com.qinggan.media.helper.MediaEnum";
+            var INFO_NAME = "com.qinggan.media.helper.base.bean.QinMediaInfo";
+            var MANAGER_NAME = "com.qinggan.app.mediaCentre.MediaManager";
+            var SRC_BEAN_NAME = "com.pateo.voyah.mediaCard.bean.SrcMediaBean";
+            var RES_ENUM_NAME = "com.pateo.voyah.mediaCard.home.enums.MediaResEnum";
+            var ADAPTER_NAME = "com.pateo.voyah.mediaCard.home.activity.MediaSrcAdapter";
+            var HOLDER_NAME = "com.pateo.voyah.mediaCard.home.activity.MediaSrcAdapter$MediaSrcHolder";
+            var HOME_SOURCE_NAME = "com.pateo.voyah.mediaCard.home.activity.HomeSrcMediaActivity";
+            var MEDIA_CONTROL_METHOD = "media_control";
+            var UriMedia = Java.use("android.net.Uri");
+            var mediaUri = UriMedia.parse("content://ru.big.town.anative.nowplaying");
+            var mediaSourcesUri = UriMedia.parse("content://ru.big.town.anative.nowplaying/sources");
             var BroadcastReceiverMedia = Java.use("android.content.BroadcastReceiver");
             var IntentFilterMedia = Java.use("android.content.IntentFilter");
-            var mediaOverlays = {};
-            var mediaSources = [];
-            var mediaSnapshot = null;
-            var mediaUpdatePending = false;
-            var mediaSourceClick = null;
-            var mediaButtonClick = null;
-            var mediaWidgetHooks = {};
             var StringMedia = Java.use("java.lang.String");
+            var NativeMediaTag = Java.retain(Java.use("java.lang.Object").$new());
+            var ArrayListMedia = Java.use("java.util.ArrayList");
+            var BundleMedia = Java.use("android.os.Bundle");
+            var mediaWidgetHooks = {};
+            var widgetConfigCache = {};
+            var widgetRewriteCache = {};
+            var receiverRegistered = false;
+            var managerHooked = false;
+            var sourceHooked = false;
+            var homeHooked = false;
+            var refreshPending = false;
+            var spotifyAvailable = false;
+            var spotifySelected = false;
+            var enabled = true;
+            var latestSnapshot = null;
+            var nativeInfo = null;
+            var lastNativeKey = "";
+            var MediaEnum = null;
+            var QinMediaInfo = null;
+            var Manager = null;
+            var SrcMediaBean = null;
+            var MediaResEnum = null;
+            var WECAR = null;
+            var WE_CAR = null;
+            var NO_MEDIA = null;
+            var spotifyControl = null;
 
             function mediaString(value) { return cleanJavaString(value); }
-
-            function mediaColumn(cursor, name, fallback) {
+            function staticField(clazz, name) {
+                // Read enum constants through reflection.  A Frida Java.Field `.value`
+                // can become a JS string and then has no JNI handle for OEM calls.
+                try {
+                    var field = clazz.class.getDeclaredField(name);
+                    field.setAccessible(true);
+                    var reflected = field.get(null);
+                    if (reflected !== null && reflected !== undefined) {
+                        try { return Java.cast(reflected, clazz); }
+                        catch (castError) { return reflected; }
+                    }
+                } catch (e) {}
+                try {
+                    var value = clazz[name];
+                    if (value !== null && value !== undefined) {
+                        if (value.value !== undefined && typeof value.value !== "string") {
+                            try { return Java.cast(value.value, clazz); }
+                            catch (castError2) { return value.value; }
+                        }
+                    }
+                } catch (e) {}
+                try { return Java.cast(clazz.valueOf(StringMedia.$new(name)), clazz); }
+                catch (e2) { return null; }
+            }
+            function fieldValue(instance, name) {
+                if (instance === null || instance === undefined) return null;
+                try {
+                    var direct = instance[name];
+                    if (direct !== null && direct !== undefined) {
+                        return direct.value !== undefined ? direct.value : direct;
+                    }
+                } catch (e) {}
+                try {
+                    var clazz = instance.getClass();
+                    while (clazz !== null) {
+                        try {
+                            var field = clazz.getDeclaredField(name);
+                            field.setAccessible(true);
+                            return field.get(instance);
+                        } catch (missing) {
+                            try { clazz = clazz.getSuperclass(); } catch (end) { clazz = null; }
+                        }
+                    }
+                } catch (e2) {}
+                return null;
+            }
+            function freshMediaEnum(name) {
+                if (MediaEnum === null) return null;
+                var value = staticField(MediaEnum, name);
+                if (value === null || value === undefined) return null;
+                try { value.getClass(); return value; } catch (e) { return null; }
+            }
+            function freshMediaResEnum(name) {
+                if (MediaResEnum === null) return null;
+                var value = staticField(MediaResEnum, name);
+                if (value === null || value === undefined) return null;
+                try { value.getClass(); return value; } catch (e) { return null; }
+            }
+            function enumName(value) {
+                if (value === null || value === undefined) return "";
+                try { return mediaString(value.name()); } catch (e) {}
+                try { return mediaString(value.toString()); } catch (e2) {}
+                return "";
+            }
+            function isWecar(value) {
+                if (value === null || value === undefined || WECAR === null) return false;
+                if (enumName(value) === "WECAR_FLOW") return true;
+                try { return value.equals(WECAR); } catch (e) { return false; }
+            }
+            function readColumn(cursor, name, fallback) {
                 try {
                     var index = cursor.getColumnIndex(name);
                     return index >= 0 ? mediaString(cursor.getString(index)) : fallback;
                 } catch (e) { return fallback; }
             }
-
-            function mediaNumber(cursor, name, fallback) {
+            function readNumber(cursor, name, fallback) {
                 try {
                     var index = cursor.getColumnIndex(name);
                     return index >= 0 ? Number(cursor.getLong(index)) : fallback;
                 } catch (e) { return fallback; }
             }
-
             function readMediaSnapshot() {
-                var snapshot = {title: "", artist: "", app: "", pkg: "", position: 0,
-                    duration: 0, hasArt: false, updatedAt: 0};
+                var result = {title: "", artist: "", album: "", app: "", pkg: "", state: 0,
+                    position: 0, duration: 0, hasArt: false, updatedAt: 0};
                 var cursor = null;
                 try {
                     cursor = ctx().getContentResolver().query(mediaUri, null, null, null, null);
                     if (cursor !== null && cursor.moveToFirst()) {
-                        snapshot.title = mediaColumn(cursor, "title", "");
-                        snapshot.artist = mediaColumn(cursor, "artist", "");
-                        snapshot.app = mediaColumn(cursor, "appLabel", "");
-                        snapshot.pkg = mediaColumn(cursor, "package", "");
-                        snapshot.position = mediaNumber(cursor, "position", 0);
-                        snapshot.duration = mediaNumber(cursor, "duration", 0);
-                        snapshot.hasArt = mediaNumber(cursor, "hasArt", 0) === 1;
-                        snapshot.updatedAt = mediaNumber(cursor, "updatedAt", 0);
+                        result.title = readColumn(cursor, "title", "");
+                        result.artist = readColumn(cursor, "artist", "");
+                        result.album = readColumn(cursor, "album", "");
+                        result.app = readColumn(cursor, "appLabel", "");
+                        result.pkg = readColumn(cursor, "package", "");
+                        result.state = readNumber(cursor, "state", 0);
+                        result.position = readNumber(cursor, "position", 0);
+                        result.duration = readNumber(cursor, "duration", 0);
+                        result.hasArt = readNumber(cursor, "hasArt", 0) === 1;
+                        result.updatedAt = readNumber(cursor, "updatedAt", 0);
                     }
                 } catch (e) { Log.w(TAG, "[media] snapshot query failed: " + e); }
                 finally { try { if (cursor !== null) cursor.close(); } catch (ignored) {} }
-                return snapshot;
+                return result;
             }
-
             function readMediaSources() {
                 var result = [];
                 var cursor = null;
@@ -1954,291 +2052,453 @@ Java.perform(function () {
                     cursor = ctx().getContentResolver().query(mediaSourcesUri, null, null, null, null);
                     if (cursor !== null) {
                         while (cursor.moveToNext()) {
-                            var pkg = mediaColumn(cursor, "package", "");
-                            if (!pkg) continue;
-                            result.push({pkg: pkg, label: mediaColumn(cursor, "appLabel", pkg),
-                                title: mediaColumn(cursor, "title", ""),
-                                artist: mediaColumn(cursor, "artist", ""),
-                                selected: mediaNumber(cursor, "selected", 0) === 1});
+                            var pkg = readColumn(cursor, "package", "");
+                            if (pkg) result.push({pkg: pkg, selected: readNumber(cursor, "selected", 0) === 1});
                         }
                     }
                 } catch (e) { Log.w(TAG, "[media] source query failed: " + e); }
                 finally { try { if (cursor !== null) cursor.close(); } catch (ignored) {} }
                 return result;
             }
-
-            function mediaThirdParty(pkg) {
-                pkg = mediaString(pkg);
-                return !!pkg && pkg.indexOf("com.qinggan.") !== 0
-                        && pkg.indexOf("com.pateo.") !== 0
-                        && pkg.indexOf("com.android.") !== 0 && pkg !== "android";
-            }
-
-            function mediaDp(value) {
-                try { return Math.max(1, Math.round(value * ctx().getResources().getDisplayMetrics().density)); }
-                catch (e) { return Math.max(1, Math.round(value)); }
-            }
-
-            function mediaProgress(snapshot) {
-                if (!(snapshot.duration > 0)) return 0;
-                return Math.max(0, Math.min(1000, Math.round(snapshot.position * 1000 / snapshot.duration)));
-            }
-
-            function mediaLoadArt() {
-                var bounds = BitmapFactoryOptionsMedia.$new();
-                bounds.inJustDecodeBounds.value = true;
+            function refreshMediaConfig() {
                 try {
-                    var stream = ctx().getContentResolver().openInputStream(mediaArtUri);
-                    if (stream === null) return null;
-                    BitmapFactoryMedia.decodeStream(stream, null, bounds);
-                    stream.close();
-                } catch (e) { return null; }
-                var edge = Math.max(Number(bounds.outWidth.value), Number(bounds.outHeight.value));
-                if (!(edge > 0)) return null;
-                var options = BitmapFactoryOptionsMedia.$new();
-                var sample = 1;
-                // The dock cover is 66 dp; 192 px retains a sharp image without retaining a
-                // 512 px Bitmap in every recreated OEM media card.
-                while (edge / (sample * 2) >= 192) sample *= 2;
-                options.inSampleSize.value = sample;
+                    var value = SettingsGlobal.getString(ctx().getContentResolver(),
+                            "voyahtune_home_third_party_media");
+                    enabled = value === null || mediaString(value) !== "0";
+                } catch (e) { enabled = true; }
+            }
+            function setInfoValue(info, name, signature, value) {
                 try {
-                    var decoded = ctx().getContentResolver().openInputStream(mediaArtUri);
-                    if (decoded === null) return null;
-                    var bitmap = BitmapFactoryMedia.decodeStream(decoded, null, options);
-                    decoded.close();
-                    return bitmap;
-                } catch (e2) { return null; }
+                    var method = info[name].overload(signature);
+                    if (signature === "java.lang.String") value = StringMedia.$new(mediaString(value));
+                    method.call(info, value);
+                } catch (e) {}
             }
-
-            function mediaRelease(value) {
-                try { if (value !== null && value !== undefined) value.$dispose(); } catch (ignored) {}
-            }
-
-            function mediaReleaseOverlay(key) {
-                var view = mediaOverlays[key];
-                if (!view) return;
-                mediaRelease(view.overlay);
-                mediaRelease(view.cover);
-                mediaRelease(view.title);
-                mediaRelease(view.artist);
-                mediaRelease(view.progress);
-                mediaRelease(view.source);
-                delete mediaOverlays[key];
-            }
-
-            function mediaAttachCard(card) {
-                if (card === null) return;
+            function buildNativeInfo(snapshot) {
+                var info = null;
+                var mediaEnum = freshMediaEnum("WECAR_FLOW");
+                if (mediaEnum === null) return null;
                 try {
-                    var retainedCard = Java.retain(card);
-                    var key = "" + Number(Java.use("java.lang.System").identityHashCode(retainedCard));
-                    Java.scheduleOnMainThread(function () {
-                        try {
-                            if (mediaOverlays[key]) return;
-                            var group = Java.cast(retainedCard, ViewGroupMedia);
-                            var overlay = FrameLayoutMedia.$new(ctx());
-                            overlay.setBackgroundColor(0xE9161A20);
-                            overlay.setPadding(mediaDp(10), mediaDp(8), mediaDp(10), mediaDp(8));
-                            // Keep the overlay limited to the media data row.  A full-card
-                            // transparent child can otherwise intercept OEM card gestures.
-                            var overlayParams = FrameLayoutMedia.LayoutParams.$new(-1, mediaDp(108));
-                            group.addView(overlay, overlayParams);
-                            overlay.setFocusable(false);
-                            overlay.setClickable(false);
-
-                            var row = LinearLayoutMedia.$new(ctx());
-                            row.setOrientation(LinearLayoutMedia.HORIZONTAL.value);
-                            overlay.addView(row, LinearLayoutMedia.LayoutParams.$new(-1, -1));
-
-                            var cover = ImageViewMedia.$new(ctx());
-                            cover.setScaleType(ImageViewMedia.ScaleType.CENTER_CROP.value);
-                            var coverParams = LinearLayoutMedia.LayoutParams.$new(mediaDp(66), mediaDp(66));
-                            coverParams.gravity.value = 16;
-                            coverParams.rightMargin.value = mediaDp(10);
-                            row.addView(cover, coverParams);
-
-                            var details = LinearLayoutMedia.$new(ctx());
-                            details.setOrientation(LinearLayoutMedia.VERTICAL.value);
-                            var detailsParams = LinearLayoutMedia.LayoutParams.$new(0, -1);
-                            detailsParams.weight.value = 1.0;
-                            row.addView(details, detailsParams);
-
-                            var title = TextViewMedia.$new(ctx());
-                            title.setTextColor(0xFFFFFFFF);
-                            title.setTextSize(16);
-                            title.setSingleLine(true);
-                            details.addView(title, LinearLayoutMedia.LayoutParams.$new(-1, -2));
-
-                            var artist = TextViewMedia.$new(ctx());
-                            artist.setTextColor(0xFFB7C0CC);
-                            artist.setTextSize(13);
-                            artist.setSingleLine(true);
-                            details.addView(artist, LinearLayoutMedia.LayoutParams.$new(-1, -2));
-
-                            var progress = null;
-                            try {
-                                progress = ProgressBarMedia.$new(ctx(), null, 0x01010078);
-                                progress.setMax(1000);
-                                details.addView(progress, LinearLayoutMedia.LayoutParams.$new(-1, mediaDp(7)));
-                            } catch (ignoredProgress) {}
-
-                            var sourceButton = ButtonMedia.$new(ctx());
-                            sourceButton.setText("Источник");
-                            sourceButton.setTextSize(11);
-                            sourceButton.setAllCaps(false);
-                            var buttonParams = LinearLayoutMedia.LayoutParams.$new(mediaDp(90), -1);
-                            buttonParams.leftMargin.value = mediaDp(8);
-                            row.addView(sourceButton, buttonParams);
-                            if (mediaButtonClick === null) {
-                                mediaButtonClick = Java.registerClass({
-                                    name: "ru.big.town.launcher.MediaSourceButtonClick",
-                                    implements: [Java.use("android.view.View$OnClickListener")],
-                                    methods: {
-                                        onClick: {
-                                            returnType: "void",
-                                            argumentTypes: ["android.view.View"],
-                                            implementation: function (view) { showMediaSources(); }
-                                        }
-                                    }
-                                });
-                            }
-                            sourceButton.setOnClickListener(mediaButtonClick.$new());
-                            mediaOverlays[key] = {overlay: Java.retain(overlay), cover: Java.retain(cover),
-                                title: Java.retain(title), artist: Java.retain(artist), progress: progress,
-                                source: Java.retain(sourceButton), artKey: ""};
-                            updateMediaOverlays();
-                        } catch (e) { Log.w(TAG, "[media] card attach failed: " + e); }
-                        finally { mediaRelease(retainedCard); }
-                    });
-                } catch (e) { Log.w(TAG, "[media] card retain failed: " + e); }
+                    info = QinMediaInfo.$new(mediaEnum);
+                } catch (e) {
+                    try { info = QinMediaInfo.$new(); } catch (e2) { return null; }
+                }
+                setInfoValue(info, "setName", "java.lang.String",
+                        snapshot.title || snapshot.app || "Spotify");
+                setInfoValue(info, "setArtist", "java.lang.String", snapshot.artist);
+                setInfoValue(info, "setAlbumName", "java.lang.String", snapshot.album);
+                setInfoValue(info, "setDuration", "long", Math.max(0, Number(snapshot.duration || 0)));
+                setInfoValue(info, "setMediaId", "java.lang.String",
+                        SPOTIFY + "|" + snapshot.title + "|" + snapshot.artist);
+                setInfoValue(info, "setMediaType", "java.lang.String", "WECAR_FLOW");
+                setInfoValue(info, "setHostId", "java.lang.String", SPOTIFY);
+                setInfoValue(info, "setPath", "java.lang.String", SPOTIFY);
+                setInfoValue(info, "setCoverUrl", "java.lang.String",
+                        snapshot.hasArt ? "content://ru.big.town.anative.nowplaying/art" : "");
+                setInfoValue(info, "setFav", "boolean", false);
+                try {
+                    var extras = BundleMedia.$new();
+                    extras.putString.overload("java.lang.String", "java.lang.String").call(
+                            extras, StringMedia.$new("package"), StringMedia.$new(SPOTIFY));
+                    setInfoValue(info, "setExtBundle", "android.os.Bundle", extras);
+                } catch (e3) {}
+                return info;
             }
-
-            function showMediaSources() {
-                mediaSources = readMediaSources();
-                if (!mediaSources.length) return;
-                var labels = [];
-                for (var i = 0; i < mediaSources.length; i++) {
-                    var source = mediaSources[i];
-                    var track = source.title ? "  ·  " + source.title
-                            + (source.artist ? " — " + source.artist : "") : "";
-                    labels.push((source.label || source.pkg) + track);
+            function sendMediaControl(command) {
+                var argument = command;
+                if (command === "play") {
+                    if (latestSnapshot !== null && Number(latestSnapshot.state) === 3) return;
+                    argument = "play_pause";
+                } else if (command === "pause") {
+                    argument = "pause_only";
                 }
                 try {
-                    if (mediaSourceClick === null) {
-                        mediaSourceClick = Java.registerClass({
-                            name: "ru.town.voyah.MediaSourceDialogClick",
-                            implements: [Java.use("android.content.DialogInterface$OnClickListener")],
-                            methods: {
-                                onClick: {
-                                    returnType: "void",
-                                    argumentTypes: ["android.content.DialogInterface", "int"],
-                                    implementation: function (dialog, which) {
-                                        var index = Number(which);
-                                        if (index < 0 || index >= mediaSources.length) return;
-                                        try {
-                                            ctx().getContentResolver().call(mediaUri, "select_source",
-                                                    mediaSources[index].pkg, null);
-                                        } catch (e) { Log.w(TAG, "[media] source selection failed: " + e); }
-                                        scheduleMediaUpdate();
-                                    }
-                                }
-                            }
-                        });
-                    }
-                    var CharSequenceArray = Java.array("java.lang.CharSequence", labels);
-                    var Builder = Java.use("android.app.AlertDialog$Builder");
-                    var dialog = Builder.$new(ctx());
-                    dialog.setTitle("Источник музыки");
-                    dialog.setItems(CharSequenceArray, mediaSourceClick.$new());
-                    dialog.setNegativeButton("Отмена", null);
-                    dialog.show();
-                } catch (e) { Log.w(TAG, "[media] source dialog failed: " + e); }
+                    ctx().getContentResolver().call(mediaUri, MEDIA_CONTROL_METHOD, argument, null);
+                } catch (e) { Log.w(TAG, "[media] native command " + command + " failed: " + e); }
             }
-
-            function updateMediaOverlays(snapshot) {
-                if (snapshot === null || snapshot === undefined) snapshot = mediaSnapshot;
-                if (snapshot === null || snapshot === undefined) snapshot = readMediaSnapshot();
-                mediaSnapshot = snapshot;
-                var enabled = cfg("home_third_party_media") !== "0";
-                var show = enabled && mediaThirdParty(snapshot.pkg) && !!snapshot.title;
-                Object.keys(mediaOverlays).forEach(function (key) {
-                    var view = mediaOverlays[key];
-                    try {
-                        if (view.overlay.getParent() === null) {
-                            mediaReleaseOverlay(key);
-                            return;
+            function installControlProxy() {
+                if (spotifyControl !== null) return;
+                try {
+                    var Control = Java.use("com.qinggan.app.mediaCentre.inter.IMediaControl");
+                    var SearchCallback = "android.support.v4.media.MediaBrowserCompat$SearchCallback";
+                    var CustomActionCallback = "android.support.v4.media.MediaBrowserCompat$CustomActionCallback";
+                    var ControlClass = Java.registerClass({
+                        name: "ru.big.town.launcher.SpotifyMediaControl" + new Date().getTime(),
+                        implements: [Control],
+                        methods: {
+                            addFav: {returnType: "void", argumentTypes: ["java.lang.String"], implementation: function () {}},
+                            addQinMediaListener: {returnType: "void", argumentTypes: ["com.qinggan.app.mediaCentre.inter.QinMediaListener"], implementation: function () {}},
+                            fastForward: {returnType: "void", argumentTypes: [], implementation: function () {}},
+                            getMediaBrowserHelper: {returnType: "com.qinggan.media.helper.MediaBrowserHelper", argumentTypes: [], implementation: function () { return null; }},
+                            getMediaType: {returnType: ENUM_NAME, argumentTypes: [], implementation: function () { return freshMediaEnum("WECAR_FLOW"); }},
+                            isConnected: {returnType: "boolean", argumentTypes: [], implementation: function () { return spotifyAvailable; }},
+                            isPlay: {returnType: "boolean", argumentTypes: [], implementation: function () { return !!latestSnapshot && Number(latestSnapshot.state) === 3; }},
+                            pause: {returnType: "void", argumentTypes: [], implementation: function () { sendMediaControl("pause"); }},
+                            play: {returnType: "void", argumentTypes: [], implementation: function () { sendMediaControl("play"); }},
+                            playNext: {returnType: "void", argumentTypes: [], implementation: function () { sendMediaControl("next"); }},
+                            playPrevious: {returnType: "void", argumentTypes: [], implementation: function () { sendMediaControl("previous"); }},
+                            registerCallback: {returnType: "void", argumentTypes: ["com.qinggan.media.helper.MediaBrowserHelper$MediaListener"], implementation: function () {}},
+                            removeFav: {returnType: "void", argumentTypes: ["java.lang.String"], implementation: function () {}},
+                            search: {returnType: "void", argumentTypes: ["java.lang.String", "android.os.Bundle", SearchCallback], implementation: function () {}},
+                            seekToProgress: {returnType: "void", argumentTypes: ["int"], implementation: function () {}},
+                            sendCommand: {returnType: "void", argumentTypes: ["java.lang.String", "android.os.Bundle", "android.os.ResultReceiver"], implementation: function () {}},
+                            sendCustomAction: [
+                                {returnType: "void", argumentTypes: ["java.lang.String", "android.os.Bundle"], implementation: function () {}},
+                                {returnType: "void", argumentTypes: ["java.lang.String", "android.os.Bundle", CustomActionCallback], implementation: function () {}}
+                            ],
+                            skipToPosition: {returnType: "void", argumentTypes: ["long"], implementation: function () {}},
+                            stop: {returnType: "void", argumentTypes: [], implementation: function () { sendMediaControl("pause"); }},
+                            unRegisterCallback: {returnType: "void", argumentTypes: ["com.qinggan.media.helper.MediaBrowserHelper$MediaListener"], implementation: function () {}}
                         }
-                        view.overlay.setVisibility(show ? 0 : 8);
-                        if (!show) return;
-                        view.title.setText(snapshot.title);
-                        view.artist.setText((snapshot.artist || snapshot.app || snapshot.pkg));
-                        if (view.progress !== null) view.progress.setProgress(mediaProgress(snapshot));
-                        var artKey = snapshot.pkg + "|" + snapshot.title;
-                        if (snapshot.hasArt && artKey !== view.artKey) {
-                            view.artKey = artKey;
-                            var bitmap = mediaLoadArt();
-                            if (bitmap !== null) view.cover.setImageBitmap(bitmap);
-                        } else if (!snapshot.hasArt) {
-                            view.artKey = "";
-                            view.cover.setImageDrawable(null);
-                        }
-                    } catch (e) { Log.w(TAG, "[media] overlay update failed: " + e); }
+                    });
+                    spotifyControl = ControlClass.$new();
+                    Log.i(TAG, "[media] native IMediaControl proxy registered");
+                } catch (e) { Log.w(TAG, "[media] IMediaControl proxy unavailable: " + e); }
+            }
+            function ensureMediaClasses() {
+                if (Manager !== null && MediaEnum !== null && QinMediaInfo !== null
+                        && WECAR !== null && WECAR !== undefined && SrcMediaBean !== null
+                        && WE_CAR !== null && WE_CAR !== undefined) return true;
+                try {
+                    MediaEnum = Java.use(ENUM_NAME);
+                    QinMediaInfo = Java.use(INFO_NAME);
+                    Manager = Java.use(MANAGER_NAME);
+                    SrcMediaBean = Java.use(SRC_BEAN_NAME);
+                    MediaResEnum = Java.use(RES_ENUM_NAME);
+                    WECAR = staticField(MediaEnum, "WECAR_FLOW");
+                    NO_MEDIA = staticField(MediaEnum, "NO");
+                    WE_CAR = staticField(MediaResEnum, "WE_CAR");
+                    return Manager !== null && WECAR !== null && WECAR !== undefined
+                            && SrcMediaBean !== null && WE_CAR !== null && WE_CAR !== undefined;
+                } catch (e) { return false; }
+            }
+            function managerInstance() {
+                try { return Manager.getInstance(); } catch (e) { return null; }
+            }
+            function hookManagerMethod(name, handler) {
+                try {
+                    var method = Manager[name];
+                    method.overloads.forEach(function (overload) {
+                        overload.implementation = function () {
+                            try {
+                                var result = handler(this, arguments);
+                                if (result !== null && result !== undefined && result.handled) return result.value;
+                            } catch (e) { Log.w(TAG, "[media] manager " + name + " failed: " + e); }
+                            return overload.apply(this, arguments);
+                        };
+                    });
+                } catch (e) { Log.w(TAG, "[media] manager hook " + name + " unavailable: " + e); }
+            }
+            function currentWecar() { return spotifyAvailable && spotifySelected; }
+            function installManagerHooks() {
+                if (managerHooked || !ensureMediaClasses()) return false;
+                var manager = managerInstance();
+                if (manager === null) return false;
+                installControlProxy();
+                hookManagerMethod("getCurMediaType", function () {
+                    var mediaEnum = freshMediaEnum("WECAR_FLOW");
+                    return currentWecar() && mediaEnum !== null
+                            ? {handled: true, value: mediaEnum} : null;
                 });
+                hookManagerMethod("getCurMediaInfo", function () {
+                    return currentWecar() && nativeInfo !== null
+                            ? {handled: true, value: nativeInfo} : null;
+                });
+                hookManagerMethod("getMediaInfoByType", function (self, args) {
+                    return isWecar(args[0]) && currentWecar() && nativeInfo !== null
+                            ? {handled: true, value: nativeInfo} : null;
+                });
+                hookManagerMethod("getMediaControl", function (self, args) {
+                    return isWecar(args[0]) && spotifyControl !== null
+                            ? {handled: true, value: spotifyControl} : null;
+                });
+                hookManagerMethod("isPlay", function (self, args) {
+                    return isWecar(args[0]) && currentWecar()
+                            ? {handled: true, value: !!latestSnapshot && Number(latestSnapshot.state) === 3} : null;
+                });
+                hookManagerMethod("getPlayState", function (self, args) {
+                    return isWecar(args[0]) && currentWecar()
+                            ? {handled: true, value: latestSnapshot === null ? 0
+                                : Number(latestSnapshot.state || 0)} : null;
+                });
+                ["play", "pause", "playNext", "playPrevious", "playOrPause"].forEach(function (name) {
+                    hookManagerMethod(name, function (self, args) {
+                        if (!isWecar(args[0]) || !currentWecar()) return null;
+                        var command = name === "playNext" ? "next"
+                                : name === "playPrevious" ? "previous"
+                                : name === "pause" ? "pause"
+                                : name === "play" ? "play" : "play_pause";
+                        sendMediaControl(command);
+                        return {handled: true, value: undefined};
+                    });
+                });
+                if (spotifyControl !== null) {
+                    try { manager.addMediaControl(spotifyControl); } catch (e) {}
+                }
+                managerHooked = true;
+                Log.i(TAG, "[media] native MediaManager hooks installed");
+                return true;
             }
-
-            function snapshotFromMediaIntent(intent) {
-                if (intent === null || intent === undefined) return null;
-                var snapshot = {title: mediaString(intent.getStringExtra("title")),
-                    artist: mediaString(intent.getStringExtra("artist")),
-                    app: mediaString(intent.getStringExtra("appLabel")),
-                    pkg: mediaString(intent.getStringExtra("package")),
-                    position: Number(intent.getLongExtra("position", 0)),
-                    duration: Number(intent.getLongExtra("duration", 0)),
-                    hasArt: intent.getBooleanExtra("hasArt", false),
-                    updatedAt: Number(intent.getLongExtra("updatedAt", 0))};
-                return snapshot;
-            }
-
-            function scheduleMediaUpdate(snapshot) {
-                if (snapshot !== null && snapshot !== undefined) mediaSnapshot = snapshot;
-                if (mediaUpdatePending) return;
-                mediaUpdatePending = true;
-                setTimeout(function () {
-                    mediaUpdatePending = false;
-                    try { Java.scheduleOnMainThread(function () {
-                        updateMediaOverlays(mediaSnapshot);
-                    }); } catch (e) {}
-                }, 120);
-            }
-
-            function widgetOperation(item) {
-                try { if (item.operation && item.operation.value !== undefined) return mediaString(item.operation.value); }
-                catch (ignored) {}
-                try { return mediaString(item.getOperation()); } catch (ignored2) {}
+            function setNativeCurrent(manager, info) {
+                var mediaEnum = freshMediaEnum("WECAR_FLOW");
+                if (mediaEnum === null) return false;
                 try {
-                    var field = item.getClass().getDeclaredField("operation");
-                    field.setAccessible(true);
-                    return mediaString(field.get(item));
-                } catch (ignored3) {}
-                return "";
-            }
-
-            function configuredWidgetCsv(key) {
-                var region = key.replace("_widget_list", "");
+                    manager.setCurMedia.overload(ENUM_NAME, INFO_NAME, "java.lang.Object").call(
+                            manager, mediaEnum, info, NativeMediaTag);
+                    return true;
+                } catch (e) { Log.w(TAG, "[media] setCurMedia failed: " + e); }
                 try {
-                    // cfg() maps both a missing key and an explicit empty value to "none".
-                    // Here those states differ: missing/empty means stock order, while the
-                    // literal "none" is the user's explicit empty shelf.
-                    var raw = SettingsGlobal.getString(ctx().getContentResolver(),
-                            "voyahtune_home_widgets_" + region);
-                    if (raw === null || raw === "") return null;
-                    return raw.toString() === "none" ? "" : raw.toString();
+                    manager.onMediaTypeChange.overload(ENUM_NAME, "java.lang.Object").call(
+                            manager, mediaEnum, NativeMediaTag);
+                    return true;
+                } catch (e2) { Log.w(TAG, "[media] onMediaTypeChange failed: " + e2); }
+                return false;
+            }
+            function pushNativeSnapshot() {
+                if (!managerHooked || !currentWecar() || latestSnapshot === null
+                        || !latestSnapshot.title) return;
+                var snapshot = latestSnapshot;
+                var key = snapshot.title + "|" + snapshot.artist + "|" + snapshot.album + "|"
+                        + snapshot.duration + "|" + snapshot.hasArt + "|" + snapshot.state;
+                if (key === lastNativeKey) return;
+                var manager = managerInstance();
+                if (manager === null) return;
+                var info = buildNativeInfo(snapshot);
+                if (info === null) return;
+                if (!setNativeCurrent(manager, info)) return;
+                var mediaEnum = freshMediaEnum("WECAR_FLOW");
+                if (mediaEnum === null) return;
+                try {
+                    manager.onMediaInfoChange.overload(ENUM_NAME, INFO_NAME, "boolean", "java.lang.Object").call(
+                            manager, mediaEnum, info, true, NativeMediaTag);
+                } catch (e) {
+                    Log.w(TAG, "[media] native info callback failed: " + e);
+                    return;
+                }
+                try {
+                    manager.onMediaStateChange.overload(ENUM_NAME, "boolean", INFO_NAME,
+                            "boolean", "java.lang.Object").call(
+                            manager, mediaEnum, Number(snapshot.state) === 3, info, true, NativeMediaTag);
+                } catch (e2) {
+                    Log.w(TAG, "[media] native state callback failed: " + e2);
+                    return;
+                }
+                nativeInfo = info;
+                lastNativeKey = key;
+                Log.i(TAG, "[media] Spotify -> native WECAR_FLOW: " + snapshot.title);
+            }
+            function clearNativeSelection() {
+                if (nativeInfo === null || !ensureMediaClasses()) return;
+                var manager = managerInstance();
+                nativeInfo = null;
+                lastNativeKey = "";
+                if (manager === null) return;
+                var mediaEnum = freshMediaEnum("NO");
+                if (mediaEnum === null) return;
+                try {
+                    manager.onMediaTypeChange.overload(ENUM_NAME, "java.lang.Object").call(
+                            manager, mediaEnum, NativeMediaTag);
+                } catch (e) {}
+            }
+            function isSpotifyBean(bean) {
+                if (bean === null || bean === undefined) return false;
+                try { if (isWecar(bean.getMediaEnum())) return true; } catch (e) {}
+                try {
+                    var mediaRes = freshMediaResEnum("WE_CAR");
+                    return mediaRes !== null && mediaRes.equals(bean.getMediaResEnum());
+                }
+                catch (e2) { return false; }
+            }
+            function makeSpotifyBean() {
+                try {
+                    var mediaRes = freshMediaResEnum("WE_CAR");
+                    return mediaRes === null ? null : SrcMediaBean.$new(mediaRes);
                 } catch (e) { return null; }
             }
-
+            function ensureSpotifyBean(adapter) {
+                if (adapter === null || adapter === undefined) return;
+                var list = fieldValue(adapter, "mediaBeans");
+                if (list === null) return;
+                var index = -1;
+                try {
+                    for (var i = 0; i < list.size(); i++) {
+                        if (isSpotifyBean(list.get(i))) { index = i; break; }
+                    }
+                    if (spotifyAvailable && index < 0) {
+                        var bean = makeSpotifyBean();
+                        if (bean !== null) list.add(bean);
+                    } else if (!spotifyAvailable && index >= 0) {
+                        list.remove.overload("int").call(list, index);
+                    }
+                    if ((spotifyAvailable && index < 0) || (!spotifyAvailable && index >= 0)) {
+                        adapter.notifyDataSetChanged();
+                    }
+                } catch (e) { Log.w(TAG, "[media] source row refresh failed: " + e); }
+            }
+            function refreshSourcePickers() {
+                try {
+                    Java.choose(HOME_SOURCE_NAME, {
+                        onMatch: function (activity) {
+                            try {
+                                var retained = Java.retain(activity);
+                                Java.scheduleOnMainThread(function () {
+                                    try { ensureSpotifyBean(fieldValue(retained, "mediaSrcAdapter")); }
+                                    catch (e) {}
+                                    finally { try { retained.$dispose(); } catch (ignored) {} }
+                                });
+                            } catch (e) {}
+                        },
+                        onComplete: function () {}
+                    });
+                } catch (e) {}
+            }
+            function installSourceHooks() {
+                if (sourceHooked || !ensureMediaClasses()) return false;
+                try {
+                    var Adapter = Java.use(ADAPTER_NAME);
+                    var Holder = Java.use(HOLDER_NAME);
+                    var fillData = Adapter.fillData.overload("java.util.List");
+                    fillData.implementation = function (list) {
+                        if (!spotifyAvailable || list === null) return fillData.call(this, list);
+                        var copy = ArrayListMedia.$new();
+                        var hasSpotify = false;
+                        for (var i = 0; i < list.size(); i++) {
+                            var item = list.get(i);
+                            copy.add(item);
+                            if (isSpotifyBean(item)) hasSpotify = true;
+                        }
+                        if (!hasSpotify) {
+                            var bean = makeSpotifyBean();
+                            if (bean !== null) copy.add(bean);
+                        }
+                        return fillData.call(this, copy);
+                    };
+                    var getMediaResEnum = Adapter.getMediaResEnum.overload();
+                    getMediaResEnum.implementation = function () {
+                        var mediaRes = freshMediaResEnum("WE_CAR");
+                        if (currentWecar() && mediaRes !== null) return mediaRes;
+                        return getMediaResEnum.call(this);
+                    };
+                    var bindView = Holder.bindView.overload("int");
+                    bindView.implementation = function (position) {
+                        var result = bindView.call(this, position);
+                        try {
+                            var bean = fieldValue(this, "srcMediaBean");
+                            if (spotifyAvailable && isSpotifyBean(bean)) {
+                                var binding = fieldValue(this, "binding");
+                                var name = fieldValue(binding, "tvName");
+                                if (name !== null) name.setText.overload("java.lang.CharSequence").call(
+                                        name, StringMedia.$new("Spotify"));
+                                try {
+                                    var icon = fieldValue(binding, "ivMain");
+                                    if (icon !== null) icon.setImageDrawable(
+                                            ctx().getPackageManager().getApplicationIcon(SPOTIFY));
+                                } catch (ignoredIcon) {}
+                            }
+                        } catch (e) {}
+                        return result;
+                    };
+                    sourceHooked = true;
+                    Log.i(TAG, "[media] native source picker hooks installed");
+                    return true;
+                } catch (e) {
+                    Log.w(TAG, "[media] source picker hooks unavailable: " + e);
+                    return false;
+                }
+            }
+            function selectSpotifySource() {
+                try {
+                    ctx().getContentResolver().call(mediaUri, "select_source", SPOTIFY, null);
+                    Log.i(TAG, "[media] Spotify source selected");
+                } catch (e) { Log.w(TAG, "[media] Spotify selection failed: " + e); }
+            }
+            function installHomeSourceHooks() {
+                if (homeHooked) return true;
+                try {
+                    var HomeSource = Java.use(HOME_SOURCE_NAME);
+                    var play = HomeSource.play.overload(SRC_BEAN_NAME);
+                    play.implementation = function (bean) {
+                        if (spotifyAvailable && isSpotifyBean(bean)) {
+                            selectSpotifySource();
+                            return;
+                        }
+                        return play.call(this, bean);
+                    };
+                    HomeSource.onResume.overloads.forEach(function (overload) {
+                        overload.implementation = function () {
+                            var result = overload.apply(this, arguments);
+                            try { ensureSpotifyBean(fieldValue(this, "mediaSrcAdapter")); } catch (e) {}
+                            return result;
+                        };
+                    });
+                    homeHooked = true;
+                    return true;
+                } catch (e) {
+                    Log.w(TAG, "[media] HomeSrcMediaActivity hooks unavailable: " + e);
+                    return false;
+                }
+            }
+            function refreshMediaState() {
+                refreshMediaConfig();
+                var snapshot = readMediaSnapshot();
+                var sources = readMediaSources();
+                var found = snapshot.pkg === SPOTIFY;
+                var selected = snapshot.pkg === SPOTIFY;
+                for (var i = 0; i < sources.length; i++) {
+                    if (sources[i].pkg === SPOTIFY) {
+                        found = true;
+                        selected = selected || sources[i].selected;
+                    }
+                }
+                var wasAvailable = spotifyAvailable;
+                var wasSelected = spotifySelected;
+                latestSnapshot = snapshot;
+                spotifyAvailable = enabled && found;
+                spotifySelected = spotifyAvailable && selected;
+                if (!spotifySelected && wasSelected) clearNativeSelection();
+                installManagerHooks();
+                installSourceHooks();
+                installHomeSourceHooks();
+                if (spotifySelected) pushNativeSnapshot();
+                if (wasAvailable !== spotifyAvailable || wasSelected !== spotifySelected) {
+                    refreshSourcePickers();
+                }
+            }
+            function scheduleMediaRefresh() {
+                if (refreshPending) return;
+                refreshPending = true;
+                setTimeout(function () {
+                    refreshPending = false;
+                    try { Java.scheduleOnMainThread(refreshMediaState); } catch (e) {}
+                }, 100);
+            }
+            function configuredWidgetCsv(key) {
+                if (Object.prototype.hasOwnProperty.call(widgetConfigCache, key)) {
+                    return widgetConfigCache[key];
+                }
+                var region = key.replace("_widget_list", "");
+                try {
+                    var raw = SettingsGlobal.getString(ctx().getContentResolver(),
+                            "voyahtune_home_widgets_" + region);
+                    var result = (raw === null || raw === "")
+                            ? null : (raw.toString() === "none" ? "" : raw.toString());
+                    widgetConfigCache[key] = result;
+                    return result;
+                } catch (e) {
+                    widgetConfigCache[key] = null;
+                    return null;
+                }
+            }
+            function invalidateWidgetRewriteCache() {
+                widgetConfigCache = {};
+                widgetRewriteCache = {};
+            }
             function rewriteWidgetJson(raw, key) {
                 var csv = configuredWidgetCsv(key);
                 if (csv === null || !raw) return raw;
                 if (csv === "") return "[]";
+                var cached = widgetRewriteCache[key];
+                if (cached !== undefined && cached.raw === raw && cached.csv === csv) return cached.value;
                 try {
                     var list = JSON.parse(raw);
                     if (!Array.isArray(list)) return raw;
@@ -2251,13 +2511,14 @@ Java.perform(function () {
                     for (var j = 0; j < wanted.length; j++) {
                         if (byOperation[wanted[j]]) result.push(byOperation[wanted[j]]);
                     }
-                    return JSON.stringify(result);
+                    var rewritten = JSON.stringify(result);
+                    widgetRewriteCache[key] = {raw: raw, csv: csv, value: rewritten};
+                    return rewritten;
                 } catch (e) {
                     Log.w(TAG, "[widgets] JSON rewrite failed for " + key + ": " + e);
                     return raw;
                 }
             }
-
             function installHomeWidgetHooks() {
                 var classes = [];
                 try { classes = Java.enumerateLoadedClassesSync(); } catch (e) { return; }
@@ -2277,11 +2538,11 @@ Java.perform(function () {
                                     if (candidate.indexOf("_widget_list") >= 0) { key = candidate; break; }
                                 }
                                 if (!key || result === null) return result;
-                                var resultClass = "";
-                                try { resultClass = "" + result.getClass().getName(); } catch (ignoredClass) {}
-                                if (resultClass === "java.lang.String") {
-                                    return StringMedia.$new(rewriteWidgetJson("" + result, key));
-                                }
+                                try {
+                                    if ("" + result.getClass().getName() === "java.lang.String") {
+                                        return StringMedia.$new(rewriteWidgetJson("" + result, key));
+                                    }
+                                } catch (ignored) {}
                                 return result;
                             };
                         });
@@ -2290,68 +2551,54 @@ Java.perform(function () {
                     } catch (e) { Log.w(TAG, "[widgets] hook failed " + className + ": " + e); }
                 }
             }
-
-            try {
-                var MediaReceiver = Java.registerClass({
-                    name: "ru.town.voyah.MediaWidgetReceiver",
-                    superClass: BroadcastReceiverMedia,
-                    methods: {
-                        onReceive: {
-                            returnType: "void",
-                            argumentTypes: ["android.content.Context", "android.content.Intent"],
-                            implementation: function (context, intent) {
-                                var action = intent === null ? "" : mediaString(intent.getAction());
-                                var snapshot = action === "ru.big.town.anative.NOW_PLAYING"
-                                        ? snapshotFromMediaIntent(intent) : null;
-                                scheduleMediaUpdate(snapshot);
-                                // Class enumeration is expensive in the launcher process. Widget
-                                // hooks are installed during bounded startup retries and on a
-                                // configuration reload, never on every MediaSession callback.
-                                if (action === RELOAD_ACT) installHomeWidgetHooks();
+            function registerMediaReceiver() {
+                if (receiverRegistered) return;
+                try {
+                    var Receiver = Java.registerClass({
+                        name: "ru.town.voyah.LauncherNativeMediaReceiver",
+                        superClass: BroadcastReceiverMedia,
+                        methods: {
+                            onReceive: {
+                                returnType: "void",
+                                argumentTypes: ["android.content.Context", "android.content.Intent"],
+                                implementation: function (context, intent) {
+                                    var action = intent === null ? "" : mediaString(intent.getAction());
+                                    if (action === RELOAD_ACT) {
+                                        invalidateWidgetRewriteCache();
+                                        installHomeWidgetHooks();
+                                    }
+                                    scheduleMediaRefresh();
+                                }
                             }
                         }
+                    });
+                    var receiver = Receiver.$new();
+                    var filter = IntentFilterMedia.$new();
+                    filter.addAction(NOW_PLAYING);
+                    filter.addAction(SOURCES);
+                    filter.addAction(RELOAD_ACT);
+                    var sdk = Java.use("android.os.Build$VERSION").SDK_INT.value;
+                    if (sdk >= 33) {
+                        ctx().registerReceiver.overload("android.content.BroadcastReceiver",
+                                "android.content.IntentFilter", "int").call(ctx(), receiver, filter, 0x2);
+                    } else {
+                        ctx().registerReceiver.overload("android.content.BroadcastReceiver",
+                                "android.content.IntentFilter").call(ctx(), receiver, filter);
                     }
-                });
-                var receiver = MediaReceiver.$new();
-                var filter = IntentFilterMedia.$new();
-                filter.addAction("ru.big.town.anative.NOW_PLAYING");
-                filter.addAction("ru.big.town.anative.NOW_PLAYING_SOURCES");
-                filter.addAction(RELOAD_ACT);
-                var sdkMedia = Java.use("android.os.Build$VERSION").SDK_INT.value;
-                if (sdkMedia >= 33) {
-                    ctx().registerReceiver.overload("android.content.BroadcastReceiver",
-                            "android.content.IntentFilter", "int").call(ctx(), receiver, filter, 0x2);
-                } else {
-                    ctx().registerReceiver.overload("android.content.BroadcastReceiver",
-                            "android.content.IntentFilter").call(ctx(), receiver, filter);
-                }
-                Log.i(TAG, "[media] active MediaSession bridge registered");
-            } catch (e) { Log.w(TAG, "[media] receiver unavailable: " + e); }
+                    receiverRegistered = true;
+                    Log.i(TAG, "[media] native MediaSession receiver registered");
+                } catch (e) { Log.w(TAG, "[media] receiver unavailable: " + e); }
+            }
 
+            refreshMediaConfig();
+            installManagerHooks();
+            installSourceHooks();
+            installHomeSourceHooks();
+            registerMediaReceiver();
+            refreshMediaState();
             installHomeWidgetHooks();
             setTimeout(installHomeWidgetHooks, 1200);
             setTimeout(installHomeWidgetHooks, 3000);
-            try {
-                Java.choose("com.pateo.voyah.mediaCard.home.view.BigMediaCard", {
-                    onMatch: mediaAttachCard, onComplete: function () {}
-                });
-            } catch (e) { Log.w(TAG, "[media] BigMediaCard unavailable: " + e); }
-            try {
-                Java.choose("com.pateo.voyah.mediaCard.home.view.v97y.DropMediaCard97y", {
-                    onMatch: mediaAttachCard, onComplete: function () {}
-                });
-            } catch (e) { Log.w(TAG, "[media] DropMediaCard97y unavailable: " + e); }
-            setTimeout(function () { try {
-                Java.choose("com.pateo.voyah.mediaCard.home.view.BigMediaCard", {
-                    onMatch: mediaAttachCard, onComplete: function () {}
-                });
-            } catch (e) {} }, 1500);
-            setTimeout(function () { try {
-                Java.choose("com.pateo.voyah.mediaCard.home.view.v97y.DropMediaCard97y", {
-                    onMatch: mediaAttachCard, onComplete: function () {}
-                });
-            } catch (e) {} }, 1500);
-            scheduleMediaUpdate();
         }
 
         installMediaWidgetBridge();

@@ -661,6 +661,10 @@ public class NowPlayingService extends Service {
             service.getSharedPreferences(NATIVE_PREFS, MODE_PRIVATE).edit()
                     .putString(MANUAL_SOURCE_KEY, requested).apply();
             service.current = selected;
+            // Keep the OEM-native Spotify alias and steering-wheel/provider commands on exactly
+            // the session the user selected.  Without this, an active Bluetooth session can win
+            // the next fresh MediaSession arbitration even though the source row is Spotify.
+            MediaControlRouter.pinSource(selected.getSessionToken());
             service.publishMediaRoute();
             service.publishSources("source-selected");
             service.publish("source-selected");

@@ -35,6 +35,8 @@ public class NowPlayingProvider extends ContentProvider {
 
     /** Synchronous command API used by the steering-wheel hook on the initial key DOWN only. */
     public static final String METHOD_MEDIA_COMMAND = "media_command";
+    /** Native OEM media-widget transport API; separate caller policy from steering-wheel keys. */
+    public static final String METHOD_MEDIA_CONTROL = "media_control";
     public static final String METHOD_SELECT_SOURCE = "select_source";
 
     public static final String AUTHORITY = "ru.big.town.anative.nowplaying";
@@ -122,8 +124,11 @@ public class NowPlayingProvider extends ContentProvider {
             result.putBoolean("selected", NowPlayingService.selectSource(arg));
             return result;
         }
-        if (!METHOD_MEDIA_COMMAND.equals(method)) return super.call(method, arg, extras);
-        enforceMediaCommandCaller();
+        if (!METHOD_MEDIA_COMMAND.equals(method) && !METHOD_MEDIA_CONTROL.equals(method)) {
+            return super.call(method, arg, extras);
+        }
+        if (METHOD_MEDIA_CONTROL.equals(method)) enforceNativeMediaCaller();
+        else enforceMediaCommandCaller();
 
         MediaControlPolicy.Command command = parseCommand(arg);
         if (command == null) {
@@ -153,6 +158,20 @@ public class NowPlayingProvider extends ContentProvider {
         }
         if (!KEYMANAGER_PACKAGE.equals(caller)) {
             throw new SecurityException("media_command is not allowed for " + caller);
+        }
+    }
+
+    private void enforceNativeMediaCaller() {
+        if (Binder.getCallingUid() == Process.myUid()) return;
+        String caller = null;
+        try {
+            caller = getCallingPackage();
+        } catch (SecurityException e) {
+            Log.w(TAG, "media_control: invalid calling package: " + e.getMessage());
+        }
+        if (!"com.qinggan.app.launcher".equals(caller)
+                && !"com.qinggan.instrumentcard".equals(caller)) {
+            throw new SecurityException("media_control is not allowed for " + caller);
         }
     }
 

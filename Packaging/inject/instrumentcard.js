@@ -1,308 +1,419 @@
-// Adds an optional "Сейчас играет" item to the driver's instrument-card process.
-//
-// The exact menu view hierarchy is different between H97C/H97X builds. The agent therefore uses
-// a real focusable overlay attached to ScreenActivity's decor root, positioned over the left menu
-// rail. It is fail-open: if the OEM activity or any optional Android widget API is unavailable, the
-// stock instrument card continues untouched.
+// Exposes an active third-party MediaSession through the instrument-card's native media model.
+// No view is added to ScreenActivity: the OEM PanelView/MusicBaseView remains the only renderer.
 Java.perform(function () {
     var TAG = "vt_instrumentcard";
+    var SPOTIFY = "com.spotify.music";
     var SETTINGS_KEY = "voyahtune_instrument_now_playing";
     var NOW_PLAYING = "ru.big.town.anative.NOW_PLAYING";
     var SOURCES = "ru.big.town.anative.NOW_PLAYING_SOURCES";
     var RELOAD = "ru.big.town.anative.DOCK_RELOAD";
+    var ENUM_NAME = "com.qinggan.media.helper.MediaEnum";
+    var INFO_NAME = "com.qinggan.media.helper.base.bean.QinMediaInfo";
+    var MANAGER_NAME = "com.qinggan.app.mediaCentre.MediaManager";
+    var MEDIA_CONTROL_METHOD = "media_control";
     var Uri = Java.use("android.net.Uri");
     var mediaUri = Uri.parse("content://ru.big.town.anative.nowplaying");
-    var artUri = Uri.parse("content://ru.big.town.anative.nowplaying/art");
+    var mediaSourcesUri = Uri.parse("content://ru.big.town.anative.nowplaying/sources");
     var ActivityThread = Java.use("android.app.ActivityThread");
     var SettingsGlobal = Java.use("android.provider.Settings$Global");
-    var System = Java.use("java.lang.System");
     var BroadcastReceiver = Java.use("android.content.BroadcastReceiver");
     var IntentFilter = Java.use("android.content.IntentFilter");
-    var ViewGroup = Java.use("android.view.ViewGroup");
-    var FrameLayout = Java.use("android.widget.FrameLayout");
-    var LinearLayout = Java.use("android.widget.LinearLayout");
-    var ImageView = Java.use("android.widget.ImageView");
-    var TextView = Java.use("android.widget.TextView");
-    var Button = Java.use("android.widget.Button");
-    var ProgressBar = Java.use("android.widget.ProgressBar");
-    var BitmapFactory = Java.use("android.graphics.BitmapFactory");
-    var app = ActivityThread.currentApplication();
-    var screenHooked = false;
+    var JavaString = Java.use("java.lang.String");
+    var NativeMediaTag = Java.retain(Java.use("java.lang.Object").$new());
+    var Bundle = Java.use("android.os.Bundle");
+    var AndroidLog = Java.use("android.util.Log");
+    var app = null;
     var receiverRegistered = false;
-    var panels = {};
-    var updatePending = false;
-    var timer = null;
-    var clickListener = null;
-    var latestInfo = null;
-    var instrumentEnabled = true;
+    var managerHooked = false;
+    var refreshPending = false;
+    var spotifyAvailable = false;
+    var spotifySelected = false;
+    var enabled = true;
+    var latestSnapshot = null;
+    var nativeInfo = null;
+    var lastNativeKey = "";
+    var MediaEnum = null;
+    var QinMediaInfo = null;
+    var Manager = null;
+    var WECAR = null;
+    var NO_MEDIA = null;
+    var spotifyControl = null;
 
-    function log(message) { try { Java.use("android.util.Log").i(TAG, message); } catch (e) {} }
-    function warn(message) { try { Java.use("android.util.Log").w(TAG, message); } catch (e) {} }
+    function log(message) { try { AndroidLog.i(TAG, message); } catch (e) {} }
+    function warn(message) { try { AndroidLog.w(TAG, message); } catch (e) {} }
     function text(value) {
         if (value === null || value === undefined) return "";
         var result = "" + value;
         return result === "null" || result === "undefined" ? "" : result;
     }
-    function dp(value) {
-        try { return Math.max(1, Math.round(value * app.getResources().getDisplayMetrics().density)); }
-        catch (e) { return Math.max(1, Math.round(value)); }
+    function currentApp() {
+        if (app !== null) return app;
+        try { app = ActivityThread.currentApplication(); } catch (e) {}
+        return app;
     }
-    function refreshEnabled() {
+    function staticField(clazz, name) {
+        // Frida exposes enum constants as Java.Field wrappers on the class proxy.  Their
+        // `.value` property may be converted to a JS string, which cannot cross a Java
+        // method boundary.  Reflection returns the actual enum object/handle.
         try {
-            var value = SettingsGlobal.getString(app.getContentResolver(), SETTINGS_KEY);
-            instrumentEnabled = value === null || text(value) !== "0";
-        } catch (e) { instrumentEnabled = true; }
+            var field = clazz.class.getDeclaredField(name);
+            field.setAccessible(true);
+            var reflected = field.get(null);
+            if (reflected !== null && reflected !== undefined) {
+                try { return Java.cast(reflected, clazz); }
+                catch (castError) { return reflected; }
+            }
+        } catch (e) {}
+        try {
+            var value = clazz[name];
+            if (value !== null && value !== undefined) {
+                if (value.value !== undefined && typeof value.value !== "string") {
+                    try { return Java.cast(value.value, clazz); }
+                    catch (castError2) { return value.value; }
+                }
+            }
+        } catch (e) {}
+        try { return Java.cast(clazz.valueOf(JavaString.$new(name)), clazz); }
+        catch (e2) { return null; }
     }
-    function column(cursor, name) {
+    function freshMediaEnum(name) {
+        if (MediaEnum === null) return null;
+        var value = staticField(MediaEnum, name);
+        if (value === null || value === undefined) return null;
+        try { value.getClass(); return value; } catch (e) { return null; }
+    }
+    function currentMediaEnum() { return freshMediaEnum("WECAR_FLOW"); }
+    function enumName(value) {
+        if (value === null || value === undefined) return "";
+        try { return text(value.name()); } catch (e) {}
+        try { return text(value.toString()); } catch (e2) {}
+        return "";
+    }
+    function isWecar(value) {
+        if (value === null || value === undefined || WECAR === null) return false;
+        if (enumName(value) === "WECAR_FLOW") return true;
+        try { return value.equals(WECAR); } catch (e) { return false; }
+    }
+    function readColumn(cursor, name, fallback) {
         try {
             var index = cursor.getColumnIndex(name);
-            return index >= 0 ? text(cursor.getString(index)) : "";
-        } catch (e) { return ""; }
+            return index >= 0 ? text(cursor.getString(index)) : fallback;
+        } catch (e) { return fallback; }
     }
-    function number(cursor, name) {
+    function readNumber(cursor, name, fallback) {
         try {
             var index = cursor.getColumnIndex(name);
-            return index >= 0 ? Number(cursor.getLong(index)) : 0;
-        } catch (e) { return 0; }
+            return index >= 0 ? Number(cursor.getLong(index)) : fallback;
+        } catch (e) { return fallback; }
     }
-    function snapshot() {
-        var result = {title: "", artist: "", pkg: "", app: "", state: 0, position: 0,
-            duration: 0, hasArt: false, updatedAt: 0};
+    function readSnapshot() {
+        var result = {title: "", artist: "", album: "", app: "", pkg: "", state: 0,
+            position: 0, duration: 0, hasArt: false, updatedAt: 0};
+        var current = currentApp();
+        if (current === null) return result;
         var cursor = null;
         try {
-            cursor = app.getContentResolver().query(mediaUri, null, null, null, null);
+            cursor = current.getContentResolver().query(mediaUri, null, null, null, null);
             if (cursor !== null && cursor.moveToFirst()) {
-                result.title = column(cursor, "title");
-                result.artist = column(cursor, "artist");
-                result.pkg = column(cursor, "package");
-                result.app = column(cursor, "appLabel");
-                result.state = number(cursor, "state");
-                result.position = number(cursor, "position");
-                result.duration = number(cursor, "duration");
-                result.hasArt = number(cursor, "hasArt") === 1;
-                result.updatedAt = number(cursor, "updatedAt");
+                result.title = readColumn(cursor, "title", "");
+                result.artist = readColumn(cursor, "artist", "");
+                result.album = readColumn(cursor, "album", "");
+                result.app = readColumn(cursor, "appLabel", "");
+                result.pkg = readColumn(cursor, "package", "");
+                result.state = readNumber(cursor, "state", 0);
+                result.position = readNumber(cursor, "position", 0);
+                result.duration = readNumber(cursor, "duration", 0);
+                result.hasArt = readNumber(cursor, "hasArt", 0) === 1;
+                result.updatedAt = readNumber(cursor, "updatedAt", 0);
             }
         } catch (e) { warn("snapshot query failed: " + e); }
         finally { try { if (cursor !== null) cursor.close(); } catch (ignored) {} }
         return result;
     }
-    function snapshotFromIntent(intent) {
-        if (intent === null || intent === undefined) return null;
-        return {title: text(intent.getStringExtra("title")), artist: text(intent.getStringExtra("artist")),
-            pkg: text(intent.getStringExtra("package")), app: text(intent.getStringExtra("appLabel")),
-            state: Number(intent.getIntExtra("state", 0)),
-            position: Number(intent.getLongExtra("position", 0)),
-            duration: Number(intent.getLongExtra("duration", 0)),
-            hasArt: intent.getBooleanExtra("hasArt", false),
-            updatedAt: Number(intent.getLongExtra("updatedAt", 0))};
-    }
-    function formatTime(milliseconds) {
-        var seconds = Math.max(0, Math.floor(Number(milliseconds || 0) / 1000));
-        var minutes = Math.floor(seconds / 60);
-        seconds = seconds % 60;
-        return minutes + ":" + (seconds < 10 ? "0" : "") + seconds;
-    }
-    function progressOf(info) {
-        if (!(info.duration > 0)) return 0;
-        return Math.max(0, Math.min(1000, Math.round(info.position * 1000 / info.duration)));
-    }
-    function loadArt() {
+    function readSources() {
+        var result = [];
+        var current = currentApp();
+        if (current === null) return result;
+        var cursor = null;
         try {
-            var stream = app.getContentResolver().openInputStream(artUri);
-            if (stream === null) return null;
-            var bitmap = BitmapFactory.decodeStream(stream);
-            stream.close();
-            return bitmap;
-        } catch (e) { return null; }
-    }
-    function installPanel(activity) {
-        if (activity === null) return;
-        try {
-            var activityKey = "" + Number(System.identityHashCode(activity));
-            Java.scheduleOnMainThread(function () {
-                try {
-                    var decor = activity.getWindow().getDecorView();
-                    var root = Java.cast(decor, ViewGroup);
-                    if (panels[activityKey]) return;
-
-                    var panel = FrameLayout.$new(activity);
-                    panel.setBackgroundColor(0xE9161A20);
-                    panel.setPadding(dp(8), dp(6), dp(8), dp(6));
-                    panel.setFocusable(true);
-                    panel.setClickable(true);
-                    var params = FrameLayout.LayoutParams.$new(dp(350), dp(126));
-                    params.gravity.value = 3 | 16; // left|center_vertical
-                    root.addView(panel, params);
-
-                    var header = Button.$new(activity);
-                    header.setText("Сейчас играет");
-                    header.setTextSize(13);
-                    header.setAllCaps(false);
-                    header.setTextColor(0xFFFFFFFF);
-                    var headerParams = FrameLayout.LayoutParams.$new(-1, dp(34));
-                    headerParams.gravity.value = 3;
-                    panel.addView(header, headerParams);
-
-                    var details = LinearLayout.$new(activity);
-                    details.setOrientation(LinearLayout.HORIZONTAL.value);
-                    var detailsParams = FrameLayout.LayoutParams.$new(-1, dp(78));
-                    detailsParams.topMargin.value = dp(38);
-                    panel.addView(details, detailsParams);
-
-                    var cover = ImageView.$new(activity);
-                    cover.setScaleType(ImageView.ScaleType.CENTER_CROP.value);
-                    var coverParams = LinearLayout.LayoutParams.$new(dp(60), dp(60));
-                    coverParams.gravity.value = 16;
-                    coverParams.rightMargin.value = dp(8);
-                    details.addView(cover, coverParams);
-
-                    var lines = LinearLayout.$new(activity);
-                    lines.setOrientation(LinearLayout.VERTICAL.value);
-                    var linesParams = LinearLayout.LayoutParams.$new(0, -1);
-                    linesParams.weight.value = 1.0;
-                    details.addView(lines, linesParams);
-
-                    var title = TextView.$new(activity);
-                    title.setTextColor(0xFFFFFFFF);
-                    title.setTextSize(15);
-                    title.setSingleLine(true);
-                    lines.addView(title, LinearLayout.LayoutParams.$new(-1, dp(24)));
-
-                    var artist = TextView.$new(activity);
-                    artist.setTextColor(0xFFB7C0CC);
-                    artist.setTextSize(12);
-                    artist.setSingleLine(true);
-                    lines.addView(artist, LinearLayout.LayoutParams.$new(-1, dp(20)));
-
-                    var timeline = TextView.$new(activity);
-                    timeline.setTextColor(0xFFB7C0CC);
-                    timeline.setTextSize(10);
-                    lines.addView(timeline, LinearLayout.LayoutParams.$new(-1, dp(18)));
-
-                    var progress = null;
-                    try {
-                        progress = ProgressBar.$new(activity, null, 0x01010078);
-                        progress.setMax(1000);
-                        lines.addView(progress, LinearLayout.LayoutParams.$new(-1, dp(6)));
-                    } catch (e) { warn("progress widget unavailable: " + e); }
-
-                    if (clickListener === null) {
-                        clickListener = Java.registerClass({
-                            name: "ru.town.voyah.InstrumentNowPlayingClick",
-                            implements: [Java.use("android.view.View$OnClickListener")],
-                            methods: {
-                                onClick: {
-                                    returnType: "void",
-                                    argumentTypes: ["android.view.View"],
-                                    implementation: function (view) {
-                                        try {
-                                            var key = "" + Number(System.identityHashCode(view));
-                                            // Header and panel share the same action: keep the item
-                                            // focusable and refresh its details on selection.
-                                            scheduleUpdate();
-                                        } catch (e) {}
-                                    }
-                                }
-                            }
-                        });
-                    }
-                    header.setOnClickListener(clickListener.$new());
-                    panel.setOnClickListener(clickListener.$new());
-                    panels[activityKey] = {panel: Java.retain(panel), cover: Java.retain(cover),
-                        title: Java.retain(title), artist: Java.retain(artist),
-                        timeline: Java.retain(timeline), progress: progress, artKey: ""};
-                    updatePanels();
-                    log("now-playing item attached to ScreenActivity");
-                } catch (e) { warn("panel attach failed: " + e); }
-            });
-        } catch (e) { warn("activity retain failed: " + e); }
-    }
-    function releaseRetained(value) {
-        try { if (value !== null && value !== undefined) value.$dispose(); } catch (ignored) {}
-    }
-    function releasePanel(key) {
-        var view = panels[key];
-        if (!view) return;
-        releaseRetained(view.panel);
-        releaseRetained(view.cover);
-        releaseRetained(view.title);
-        releaseRetained(view.artist);
-        releaseRetained(view.timeline);
-        releaseRetained(view.progress);
-        delete panels[key];
-    }
-    function stopTimer() {
-        if (timer !== null) clearTimeout(timer);
-        timer = null;
-    }
-    function scheduleTimeline(show, info) {
-        stopTimer();
-        // PlaybackState.STATE_PLAYING is 3. Position is extrapolated from updatedAt, therefore
-        // no Provider/Binder query is needed for every visual second of the timeline.
-        if (!show || !info || info.state !== 3 || !info.duration) return;
-        timer = setTimeout(function () {
-            timer = null;
-            scheduleUpdate();
-        }, 1000);
-    }
-    function updatePanels(info) {
-        if (info !== null && info !== undefined) latestInfo = info;
-        if (latestInfo === null) latestInfo = snapshot();
-        info = latestInfo;
-        var show = instrumentEnabled && Object.keys(panels).length > 0 && !!info.pkg && !!info.title;
-        var position = Number(info.position || 0);
-        if (show && info.state === 3 && info.updatedAt > 0) {
-            position = Math.min(Number(info.duration || 0), position + Math.max(0, Date.now() - info.updatedAt));
-        }
-        Object.keys(panels).forEach(function (key) {
-            var view = panels[key];
-            try {
-                view.panel.setVisibility(show ? 0 : 8);
-                if (!show) return;
-                view.title.setText(info.title);
-                view.artist.setText(info.artist || info.app || info.pkg);
-                view.timeline.setText(formatTime(position) + " / " + formatTime(info.duration));
-                if (view.progress !== null) view.progress.setProgress(progressOf({position: position, duration: info.duration}));
-                var artKey = info.pkg + "|" + info.title;
-                if (info.hasArt && artKey !== view.artKey) {
-                    view.artKey = artKey;
-                    var bitmap = loadArt();
-                    if (bitmap !== null) view.cover.setImageBitmap(bitmap);
-                } else if (!info.hasArt) {
-                    view.artKey = "";
-                    view.cover.setImageDrawable(null);
+            cursor = current.getContentResolver().query(mediaSourcesUri, null, null, null, null);
+            if (cursor !== null) {
+                while (cursor.moveToNext()) {
+                    var pkg = readColumn(cursor, "package", "");
+                    if (pkg) result.push({pkg: pkg, selected: readNumber(cursor, "selected", 0) === 1});
                 }
-            } catch (e) { warn("panel update failed: " + e); }
-        });
-        scheduleTimeline(show, info);
+            }
+        } catch (e) { warn("source query failed: " + e); }
+        finally { try { if (cursor !== null) cursor.close(); } catch (ignored) {} }
+        return result;
     }
-    function scheduleUpdate(info) {
-        if (info !== null && info !== undefined) latestInfo = info;
-        if (updatePending) return;
-        updatePending = true;
+    function refreshConfig() {
+        var current = currentApp();
+        if (current === null) return;
+        try {
+            var value = SettingsGlobal.getString(current.getContentResolver(), SETTINGS_KEY);
+            enabled = value === null || text(value) !== "0";
+        } catch (e) { enabled = true; }
+    }
+    function setInfoValue(info, name, signature, value) {
+        try {
+            var method = info[name].overload(signature);
+            if (signature === "java.lang.String") value = JavaString.$new(text(value));
+            method.call(info, value);
+        } catch (e) {}
+    }
+    function buildNativeInfo(snapshot) {
+        var info = null;
+        var mediaEnum = freshMediaEnum("WECAR_FLOW");
+        if (mediaEnum === null) return null;
+        try {
+            info = QinMediaInfo.$new(mediaEnum);
+        } catch (e) {
+            try { info = QinMediaInfo.$new(); } catch (e2) { return null; }
+        }
+        setInfoValue(info, "setName", "java.lang.String", snapshot.title || snapshot.app || "Spotify");
+        setInfoValue(info, "setArtist", "java.lang.String", snapshot.artist);
+        setInfoValue(info, "setAlbumName", "java.lang.String", snapshot.album);
+        setInfoValue(info, "setDuration", "long", Math.max(0, Number(snapshot.duration || 0)));
+        setInfoValue(info, "setMediaId", "java.lang.String",
+                SPOTIFY + "|" + snapshot.title + "|" + snapshot.artist);
+        setInfoValue(info, "setMediaType", "java.lang.String", "WECAR_FLOW");
+        setInfoValue(info, "setHostId", "java.lang.String", SPOTIFY);
+        setInfoValue(info, "setPath", "java.lang.String", SPOTIFY);
+        setInfoValue(info, "setCoverUrl", "java.lang.String",
+                snapshot.hasArt ? "content://ru.big.town.anative.nowplaying/art" : "");
+        setInfoValue(info, "setFav", "boolean", false);
+        try {
+            var extras = Bundle.$new();
+            extras.putString.overload("java.lang.String", "java.lang.String").call(
+                    extras, JavaString.$new("package"), JavaString.$new(SPOTIFY));
+            setInfoValue(info, "setExtBundle", "android.os.Bundle", extras);
+        } catch (e3) {}
+        return info;
+    }
+    function sendControl(command) {
+        var current = currentApp();
+        if (current === null) return;
+        var argument = command;
+        if (command === "play") {
+            if (latestSnapshot !== null && Number(latestSnapshot.state) === 3) return;
+            argument = "play_pause";
+        } else if (command === "pause") {
+            argument = "pause_only";
+        }
+        try {
+            current.getContentResolver().call(mediaUri, MEDIA_CONTROL_METHOD, argument, null);
+        } catch (e) { warn("native media command " + command + " failed: " + e); }
+    }
+    function installControlProxy() {
+        if (spotifyControl !== null) return;
+        try {
+            var Control = Java.use("com.qinggan.app.mediaCentre.inter.IMediaControl");
+            var SearchCallback = "android.support.v4.media.MediaBrowserCompat$SearchCallback";
+            var CustomActionCallback = "android.support.v4.media.MediaBrowserCompat$CustomActionCallback";
+            var ControlClass = Java.registerClass({
+                name: "ru.big.town.instrument.SpotifyMediaControl" + new Date().getTime(),
+                implements: [Control],
+                methods: {
+                    addFav: {returnType: "void", argumentTypes: ["java.lang.String"], implementation: function () {}},
+                    addQinMediaListener: {returnType: "void", argumentTypes: ["com.qinggan.app.mediaCentre.inter.QinMediaListener"], implementation: function () {}},
+                    fastForward: {returnType: "void", argumentTypes: [], implementation: function () {}},
+                    getMediaBrowserHelper: {returnType: "com.qinggan.media.helper.MediaBrowserHelper", argumentTypes: [], implementation: function () { return null; }},
+                    getMediaType: {returnType: ENUM_NAME, argumentTypes: [], implementation: function () { return currentMediaEnum(); }},
+                    isConnected: {returnType: "boolean", argumentTypes: [], implementation: function () { return spotifyAvailable; }},
+                    isPlay: {returnType: "boolean", argumentTypes: [], implementation: function () { return !!latestSnapshot && Number(latestSnapshot.state) === 3; }},
+                    pause: {returnType: "void", argumentTypes: [], implementation: function () { sendControl("pause"); }},
+                    play: {returnType: "void", argumentTypes: [], implementation: function () { sendControl("play"); }},
+                    playNext: {returnType: "void", argumentTypes: [], implementation: function () { sendControl("next"); }},
+                    playPrevious: {returnType: "void", argumentTypes: [], implementation: function () { sendControl("previous"); }},
+                    registerCallback: {returnType: "void", argumentTypes: ["com.qinggan.media.helper.MediaBrowserHelper$MediaListener"], implementation: function () {}},
+                    removeFav: {returnType: "void", argumentTypes: ["java.lang.String"], implementation: function () {}},
+                    search: {returnType: "void", argumentTypes: ["java.lang.String", "android.os.Bundle", SearchCallback], implementation: function () {}},
+                    seekToProgress: {returnType: "void", argumentTypes: ["int"], implementation: function () {}},
+                    sendCommand: {returnType: "void", argumentTypes: ["java.lang.String", "android.os.Bundle", "android.os.ResultReceiver"], implementation: function () {}},
+                    sendCustomAction: [
+                        {returnType: "void", argumentTypes: ["java.lang.String", "android.os.Bundle"], implementation: function () {}},
+                        {returnType: "void", argumentTypes: ["java.lang.String", "android.os.Bundle", CustomActionCallback], implementation: function () {}}
+                    ],
+                    skipToPosition: {returnType: "void", argumentTypes: ["long"], implementation: function () {}},
+                    stop: {returnType: "void", argumentTypes: [], implementation: function () { sendControl("pause"); }},
+                    unRegisterCallback: {returnType: "void", argumentTypes: ["com.qinggan.media.helper.MediaBrowserHelper$MediaListener"], implementation: function () {}}
+                }
+            });
+            spotifyControl = ControlClass.$new();
+            log("native IMediaControl proxy registered");
+        } catch (e) { warn("IMediaControl proxy unavailable: " + e); }
+    }
+    function ensureMediaClasses() {
+        if (Manager !== null && MediaEnum !== null && QinMediaInfo !== null
+                && WECAR !== null && WECAR !== undefined) return true;
+        try {
+            MediaEnum = Java.use(ENUM_NAME);
+            QinMediaInfo = Java.use(INFO_NAME);
+            Manager = Java.use(MANAGER_NAME);
+            WECAR = staticField(MediaEnum, "WECAR_FLOW");
+            NO_MEDIA = staticField(MediaEnum, "NO");
+            return Manager !== null && WECAR !== null && WECAR !== undefined;
+        } catch (e) { return false; }
+    }
+    function managerInstance() {
+        try { return Manager.getInstance(); } catch (e) { return null; }
+    }
+    function hookManagerMethod(name, handler) {
+        try {
+            var method = Manager[name];
+            method.overloads.forEach(function (overload) {
+                overload.implementation = function () {
+                    try {
+                        var result = handler(this, arguments);
+                        if (result !== null && result !== undefined && result.handled) return result.value;
+                    } catch (e) { warn(name + " bridge failed: " + e); }
+                    return overload.apply(this, arguments);
+                };
+            });
+        } catch (e) { warn("manager hook " + name + " unavailable: " + e); }
+    }
+    function currentWecar() { return spotifyAvailable && spotifySelected; }
+    function installManagerHooks() {
+        if (managerHooked || !ensureMediaClasses()) return false;
+        var manager = managerInstance();
+        if (manager === null) return false;
+        installControlProxy();
+        hookManagerMethod("getCurMediaType", function () {
+            var mediaEnum = currentMediaEnum();
+            return currentWecar() && mediaEnum !== null ? {handled: true, value: mediaEnum} : null;
+        });
+        hookManagerMethod("getCurMediaInfo", function () {
+            return currentWecar() && nativeInfo !== null ? {handled: true, value: nativeInfo} : null;
+        });
+        hookManagerMethod("getMediaInfoByType", function (self, args) {
+            return isWecar(args[0]) && currentWecar() && nativeInfo !== null
+                    ? {handled: true, value: nativeInfo} : null;
+        });
+        hookManagerMethod("getMediaControl", function (self, args) {
+            return isWecar(args[0]) && spotifyControl !== null ? {handled: true, value: spotifyControl} : null;
+        });
+        hookManagerMethod("isPlay", function (self, args) {
+            return isWecar(args[0]) && currentWecar()
+                    ? {handled: true, value: !!latestSnapshot && Number(latestSnapshot.state) === 3} : null;
+        });
+        hookManagerMethod("getPlayState", function (self, args) {
+            return isWecar(args[0]) && currentWecar()
+                    ? {handled: true, value: latestSnapshot === null ? 0 : Number(latestSnapshot.state || 0)} : null;
+        });
+        ["play", "pause", "playNext", "playPrevious", "playOrPause"].forEach(function (name) {
+            hookManagerMethod(name, function (self, args) {
+                if (!isWecar(args[0]) || !currentWecar()) return null;
+                var command = name === "playNext" ? "next" : name === "playPrevious" ? "previous"
+                        : name === "pause" ? "pause" : name === "play" ? "play" : "play_pause";
+                sendControl(command);
+                return {handled: true, value: undefined};
+            });
+        });
+        if (spotifyControl !== null) {
+            try { manager.addMediaControl(spotifyControl); } catch (e) {}
+        }
+        managerHooked = true;
+        log("native MediaManager hooks installed");
+        return true;
+    }
+    function setNativeCurrent(manager, info) {
+        var mediaEnum = freshMediaEnum("WECAR_FLOW");
+        if (mediaEnum === null) return false;
+        try {
+            manager.setCurMedia.overload(ENUM_NAME, INFO_NAME, "java.lang.Object").call(
+                    manager, mediaEnum, info, NativeMediaTag);
+            return true;
+        } catch (e) { warn("setCurMedia failed: " + e); }
+        try {
+            manager.onMediaTypeChange.overload(ENUM_NAME, "java.lang.Object").call(
+                    manager, mediaEnum, NativeMediaTag);
+            return true;
+        } catch (e2) { warn("onMediaTypeChange failed: " + e2); }
+        return false;
+    }
+    function pushNativeSnapshot() {
+        if (!managerHooked || !currentWecar() || latestSnapshot === null || !latestSnapshot.title) return;
+        var snapshot = latestSnapshot;
+        var key = snapshot.title + "|" + snapshot.artist + "|" + snapshot.album + "|"
+                + snapshot.duration + "|" + snapshot.hasArt + "|" + snapshot.state;
+        if (key === lastNativeKey) return;
+        var manager = managerInstance();
+        if (manager === null) return;
+        var info = buildNativeInfo(snapshot);
+        if (info === null) return;
+        if (!setNativeCurrent(manager, info)) return;
+        var mediaEnum = freshMediaEnum("WECAR_FLOW");
+        if (mediaEnum === null) return;
+        try {
+            manager.onMediaInfoChange.overload(ENUM_NAME, INFO_NAME, "boolean", "java.lang.Object").call(
+                    manager, mediaEnum, info, true, NativeMediaTag);
+        } catch (e) { warn("native info callback failed: " + e); return; }
+        try {
+            manager.onMediaStateChange.overload(ENUM_NAME, "boolean", INFO_NAME,
+                    "boolean", "java.lang.Object").call(
+                    manager, mediaEnum, Number(snapshot.state) === 3, info, true, NativeMediaTag);
+        } catch (e2) { warn("native state callback failed: " + e2); return; }
+        nativeInfo = info;
+        lastNativeKey = key;
+        log("Spotify -> native WECAR_FLOW: " + snapshot.title);
+    }
+    function clearNativeSelection() {
+        if (nativeInfo === null || !ensureMediaClasses()) return;
+        var manager = managerInstance();
+        nativeInfo = null;
+        lastNativeKey = "";
+        if (manager === null) return;
+        var mediaEnum = freshMediaEnum("NO");
+        if (mediaEnum === null) return;
+        try {
+            manager.onMediaTypeChange.overload(ENUM_NAME, "java.lang.Object").call(
+                    manager, mediaEnum, NativeMediaTag);
+        } catch (e) {}
+    }
+    function refreshState() {
+        refreshConfig();
+        var snapshot = readSnapshot();
+        var sources = readSources();
+        var found = snapshot.pkg === SPOTIFY;
+        var selected = snapshot.pkg === SPOTIFY;
+        for (var i = 0; i < sources.length; i++) {
+            if (sources[i].pkg === SPOTIFY) {
+                found = true;
+                selected = selected || sources[i].selected;
+            }
+        }
+        var wasSelected = spotifySelected;
+        latestSnapshot = snapshot;
+        spotifyAvailable = enabled && found;
+        spotifySelected = spotifyAvailable && selected;
+        if (!spotifySelected && wasSelected) clearNativeSelection();
+        installManagerHooks();
+        if (spotifySelected) pushNativeSnapshot();
+    }
+    function scheduleRefresh() {
+        if (refreshPending) return;
+        refreshPending = true;
         setTimeout(function () {
-            updatePending = false;
-            try { Java.scheduleOnMainThread(function () { updatePanels(latestInfo); }); } catch (e) {}
+            refreshPending = false;
+            try {
+                Java.scheduleOnMainThread(function () {
+                    refreshState();
+                });
+            } catch (e) {}
         }, 100);
     }
     function registerUpdates() {
-        if (receiverRegistered || app === null) return;
+        if (receiverRegistered || currentApp() === null) return;
         try {
             var Receiver = Java.registerClass({
-                name: "ru.town.voyah.InstrumentNowPlayingReceiver",
+                name: "ru.big.town.instrument.NativeMediaReceiver",
                 superClass: BroadcastReceiver,
                 methods: {
                     onReceive: {
                         returnType: "void",
                         argumentTypes: ["android.content.Context", "android.content.Intent"],
-                            implementation: function (context, intent) {
-                                var action = text(intent === null ? null : intent.getAction());
-                                if (action === NOW_PLAYING) scheduleUpdate(snapshotFromIntent(intent));
-                                else {
-                                    refreshEnabled();
-                                    scheduleUpdate();
-                                }
-                            }
+                        implementation: function () { scheduleRefresh(); }
                     }
                 }
             });
@@ -311,69 +422,31 @@ Java.perform(function () {
             filter.addAction(NOW_PLAYING);
             filter.addAction(SOURCES);
             filter.addAction(RELOAD);
+            var current = currentApp();
             var sdk = Java.use("android.os.Build$VERSION").SDK_INT.value;
             if (sdk >= 33) {
-                app.registerReceiver.overload("android.content.BroadcastReceiver",
-                        "android.content.IntentFilter", "int").call(app, receiver, filter, 0x2);
+                current.registerReceiver.overload("android.content.BroadcastReceiver",
+                        "android.content.IntentFilter", "int").call(current, receiver, filter, 0x2);
             } else {
-                app.registerReceiver.overload("android.content.BroadcastReceiver",
-                        "android.content.IntentFilter").call(app, receiver, filter);
+                current.registerReceiver.overload("android.content.BroadcastReceiver",
+                        "android.content.IntentFilter").call(current, receiver, filter);
             }
             receiverRegistered = true;
-        } catch (e) { warn("update receiver unavailable: " + e); }
+            log("native media receiver registered");
+        } catch (e) { warn("receiver unavailable: " + e); }
     }
-    function hookScreenActivity() {
-        if (screenHooked) return true;
-        var ScreenActivity = null;
-        try { ScreenActivity = Java.use("com.qinggan.instrumentcard.ScreenActivity"); }
-        catch (e) { return false; }
-        try {
-            ScreenActivity.onCreate.overloads.forEach(function (overload) {
-                overload.implementation = function () {
-                    var result = overload.apply(this, arguments);
-                    try { installPanel(this); } catch (e) { warn("onCreate panel: " + e); }
-                    return result;
-                };
-            });
-            ScreenActivity.onResume.overloads.forEach(function (overload) {
-                overload.implementation = function () {
-                    var result = overload.apply(this, arguments);
-                    try { installPanel(this); scheduleUpdate(); } catch (e) {}
-                    return result;
-                };
-            });
-            ScreenActivity.onDestroy.overloads.forEach(function (overload) {
-                overload.implementation = function () {
-                    try {
-                        var key = "" + Number(System.identityHashCode(this));
-                        releasePanel(key);
-                        if (Object.keys(panels).length === 0) stopTimer();
-                    } catch (e) {}
-                    return overload.apply(this, arguments);
-                };
-            });
-            screenHooked = true;
-            try {
-                Java.choose("com.qinggan.instrumentcard.ScreenActivity", {
-                    onMatch: installPanel, onComplete: function () {}
-                });
-            } catch (e) {}
-            log("ScreenActivity hooks installed");
-            return true;
-        } catch (e) { warn("ScreenActivity hooks failed: " + e); return false; }
+    function ensureReady() {
+        if (currentApp() === null) {
+            setTimeout(function () { try { Java.perform(ensureReady); } catch (e) {} }, 1000);
+            return;
+        }
+        refreshState();
+        installManagerHooks();
+        registerUpdates();
+        if (!managerHooked) {
+            setTimeout(function () { try { Java.perform(ensureReady); } catch (e) {} }, 1200);
+        }
     }
-
-    if (app === null) {
-        warn("currentApplication is null");
-        return;
-    }
-    registerUpdates();
-    refreshEnabled();
-    hookScreenActivity();
-    function retryScreenHook() {
-        if (screenHooked) return;
-        try { Java.perform(function () { hookScreenActivity(); }); } catch (e) {}
-        if (!screenHooked) setTimeout(retryScreenHook, 5000);
-    }
-    setTimeout(retryScreenHook, 1000);
+    log("native bridge started (no ScreenActivity overlay)");
+    ensureReady();
 });
