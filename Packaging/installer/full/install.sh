@@ -28,7 +28,7 @@ fi
 # Полный локальный preflight до первого ADB-вызова.
 for FULL_REQUIRED_ASSET in load.bin steeringwheelkeys.js launcherdock.js multidisplay.js vd_bypass.js \
         app_client.js \
-        apollo_tech.js keyboard_lock_en.js keyboard_ru.js \
+        apollo_tech.js keyboard_lock_en.js keyboard_ru.js voyahtune-hook-manifest.json \
         voyahtune_keyboard_en_config.json \
         voyahtune_keyboard_ru_config.json voyahtune_skb_qwerty_ru.json \
         frida-inject-16.2.1-android-arm64 voyahtune.load.rc \
@@ -39,6 +39,43 @@ for FULL_REQUIRED_ASSET in load.bin steeringwheelkeys.js launcherdock.js multidi
         exit 1
     fi
 done
+
+# The manifest is the commit record for the exact hook set. Validate every script before the first
+# ADB call; it is installed last so a partial copy can never publish a new manifest as complete.
+host_sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" | awk '{print $1}'
+    else
+        return 1
+    fi
+}
+
+verify_hook_manifest_entry() {
+    HOOK_ID=$1
+    HOOK_PROCESS=$2
+    HOOK_SCRIPT=$3
+    HOOK_EXPECTED=$(sed -n \
+        's/.*"id":"'"$HOOK_ID"'","process":"'"$HOOK_PROCESS"'","script":"'"$HOOK_SCRIPT"'","sha256":"\([0-9a-f]*\)".*/\1/p' \
+        voyahtune-hook-manifest.json)
+    [ "${#HOOK_EXPECTED}" -eq 64 ] || return 1
+    HOOK_ACTUAL=$(host_sha256 "$HOOK_SCRIPT") || return 1
+    [ "$HOOK_ACTUAL" = "$HOOK_EXPECTED" ]
+}
+
+if [ "$(grep -F -x -c '  \"schemaVersion\": 1,' voyahtune-hook-manifest.json)" -ne 1 ] \
+        || [ "$(grep -F -c '{\"id\":' voyahtune-hook-manifest.json)" -ne 7 ] \
+        || ! verify_hook_manifest_entry vd-bypass system_server vd_bypass.js \
+        || ! verify_hook_manifest_entry steering-wheel com.qinggan.keymanager.service steeringwheelkeys.js \
+        || ! verify_hook_manifest_entry launcher-dock com.qinggan.app.launcher launcherdock.js \
+        || ! verify_hook_manifest_entry multi-display com.qinggan.systemservice multidisplay.js \
+        || ! verify_hook_manifest_entry apollo-tech com.qinggan.app.vehiclesetting apollo_tech.js \
+        || ! verify_hook_manifest_entry keyboard-en com.qinggan.app.qgime keyboard_lock_en.js \
+        || ! verify_hook_manifest_entry keyboard-ru com.qinggan.app.qgime keyboard_ru.js; then
+    echo "!!! Hook manifest не совпадает с exact process/script/hash contract — устройство не изменялось."
+    exit 1
+fi
 
 adb root
 adb wait-for-device
@@ -641,6 +678,7 @@ install_required_data_file voyahtune_keyboard_en_config.json /data/local/bin/voy
 install_required_data_file voyahtune_keyboard_ru_config.json /data/local/bin/voyahtune_keyboard_ru_config.json 644 || exit 1
 install_required_data_file voyahtune_skb_qwerty_ru.json /data/local/bin/voyahtune_skb_qwerty_ru.json 644 || exit 1
 install_required_data_file frida-inject-16.2.1-android-arm64 /data/local/bin/frida-inject 755 || exit 1
+install_required_data_file voyahtune-hook-manifest.json /data/local/bin/voyahtune-hook-manifest.json 644 || exit 1
 
 # app_client.js заменяет прежний fullscreen_client.js. Сначала новый файл опубликован атомарно,
 # затем выгружаем возможные legacy-agent процессы и удаляем старый файл/оба поколения маркеров.
@@ -674,9 +712,6 @@ if ! adb shell '
     echo "!!! Не удалось завершить миграцию app_client.js — hook-loader будет возвращён."
     exit 1
 fi
-# Удаляем неиспользуемый manifest, оставшийся от предыдущих full-релизов.
-adb shell "rm -f /data/local/bin/voyahtune-hook-manifest.json /data/local/bin/voyahtune-hook-manifest.json.voyahtune.new" || exit 1
-
 echo "=== Миграция boot-hook предыдущего full-релиза ==="
 if ! migrate_legacy_init_logcat; then
     exit 1

@@ -26,14 +26,11 @@ forbid_ci() {
     fi
 }
 
-forbid "$LOADER" 'HOOK_MANIFEST'
-forbid "$LOADER" 'sha256_path'
-forbid "$LOADER" 'INTEGRITY'
-forbid "$LOADER" 'manifest='
-require "$FULL_INSTALL" 'rm -f /data/local/bin/voyahtune-hook-manifest.json'
-forbid "$FULL_INSTALL" 'install_required_data_file voyahtune-hook-manifest.json'
-forbid "$FULL_INSTALL" 'host_sha256'
-forbid "$FULL_INSTALL" 'verify_hook_manifest'
+require "$LOADER" 'HOOK_MANIFEST=/data/local/bin/voyahtune-hook-manifest.json'
+require "$LOADER" 'sha256_path() {'
+require "$LOADER" 'INTEGRITY'
+require "$LOADER" 'manifest=$MANIFEST_SHA'
+require "$FULL_INSTALL" 'install_required_data_file voyahtune-hook-manifest.json'
 
 require "$LOADER" 'mv -f "$STATUS_STAGE" "$HOOK_STATUS_FILE"'
 require "$LOADER" 'if [ "$HOOK_STATUS_LOCAL_PAYLOAD" != "$HOOK_STATUS_PAYLOAD" ]; then'
@@ -46,7 +43,7 @@ require "$PROVIDER" 'Binder.getCallingUid() != 0'
 require "$PROVIDER" '.putString(HookStatusContract.PAYLOAD_KEY, arg)'
 require "$PROVIDER" '.commit();'
 require "$CONTRACT" 'MAX_PAYLOAD_LENGTH = 2_048'
-require "$CONTRACT" 'parts.length != 3 + HOOK_IDS.length'
+require "$CONTRACT" 'parts.length != 4 + HOOK_IDS.length'
 require "$CONTRACT" 'AUTHORITY = "ru.big.town.restoremode.restoremodecontentprovider"'
 require "$CONTRACT" 'METHOD_PUBLISH = "publishHookStatusV1"'
 require "$APP_MANIFEST" 'android:authorities="ru.big.town.restoremode.restoremodecontentprovider"'
@@ -68,4 +65,4 @@ for installer in "$FULL_INSTALL" "$LIGHT_INSTALL"; do
     forbid "$installer" 'signal_hook_runtime'
 done
 
-echo "PASS: direct hook install and demand-scoped status contract"
+echo "PASS: hook manifest and demand-scoped status contract"
