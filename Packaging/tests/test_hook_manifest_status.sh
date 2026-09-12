@@ -98,6 +98,8 @@ require "$FULL_INSTALL" 'setprop ctl.stop voyahtune_load'
 require "$FULL_INSTALL" 'getprop init.svc.voyahtune_load'
 require "$FULL_INSTALL" "grep -F -x -c '  \"schemaVersion\": 1,' voyahtune-hook-manifest.json"
 forbid "$FULL_INSTALL" "grep -F -x -c '  \\\"schemaVersion\\\": 1,' voyahtune-hook-manifest.json"
+require "$FULL_INSTALL" "grep -F -c '{\"id\":' voyahtune-hook-manifest.json"
+forbid "$FULL_INSTALL" "grep -F -c '{\\\"id\\\":' voyahtune-hook-manifest.json"
 forbid "$FULL_INSTALL" 'pgrep -f'
 forbid "$FULL_INSTALL" 'pkill -'
 forbid "$FULL_INSTALL" 'signal_hook_runtime'
