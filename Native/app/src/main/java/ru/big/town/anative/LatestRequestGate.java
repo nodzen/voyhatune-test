@@ -41,6 +41,11 @@ final class LatestRequestGate<T> {
         return running;
     }
 
+    /** Drops a queued follow-up while allowing an already running request to finish. */
+    synchronized void clearPending() {
+        latest = running;
+    }
+
     synchronized void close() {
         closed = true;
         latest = null;

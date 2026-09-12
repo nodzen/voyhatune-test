@@ -424,6 +424,7 @@ final class SplitHostTaskLane {
         return cachedWatchEnabled;
     }
 
+    @SuppressWarnings("deprecation")
     private TaskQuery queryTasks() {
         assertWorkerThread();
         if (activityManager == null) return new TaskQuery(SplitHostTaskSnapshot.unknown());

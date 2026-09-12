@@ -49,8 +49,8 @@ public class SetModesService extends Service {
     static final int MSG_APPLY_FORCED_EV           = 35; // форсированный электрорежим (arg1: 1=вкл)
     static final int MSG_REBOOT                     = 22; // перезагрузка системы (голова)
     static final int MSG_WASH_MODE                  = 23; // активация режима мойки
-    static final int MSG_FLOATING_BACK              = 24; // плавающая кнопка «Назад» (arg1: 1=вкл)
-    static final int MSG_FLOATING_BACK_SIDE         = 25; // сторона кнопки (arg1: 0 лево, 1 верх, 2 право)
+    static final int MSG_FLOATING_BACK              = 24; // плавающие Назад/Home (arg1: 1=вкл)
+    static final int MSG_FLOATING_BACK_SIDE         = 25; // сторона блока (arg1: 0 лево, 1 верх, 2 право)
     static final int MSG_GRANT_INSTALL              = 26; // выдать app-op установки из неизв. источников (data: "pkg")
     static final int MSG_CLOSE_ALL                  = 27; // закрыть все сторонние приложения (forceStopPackage)
     static final int MSG_SET_THEME                  = 28; // тема системы/приложений (arg1: 0 авто, 1 светлая, 2 тёмная)
@@ -81,6 +81,10 @@ public class SetModesService extends Service {
     private static final long CAR_POWER_CONNECT_WATCHDOG_MS = 15_000L;
 
     class IncomingHandler extends Handler {
+        IncomingHandler() {
+            super(Looper.getMainLooper());
+        }
+
         @Override
         public void handleMessage(Message msg) {
             switch (msg.what) {
@@ -108,7 +112,7 @@ public class SetModesService extends Service {
                 case MSG_AUTO_LIGHT_DISABLE:
                     Log.i(TAG, "handleMessage() MSG_AUTO_LIGHT_DISABLE");
                     saveAutoLightState(false);
-                    stopLightSensorService();
+                    stopLightSensorServiceIfUnused();
                     break;
 
                 case MSG_LEAVE_CAR:
@@ -246,7 +250,7 @@ public class SetModesService extends Service {
     }
 
     /**
-     * Вкл/выкл плавающую кнопку «Назад». Сам accessibility-сервис остаётся подключённым без оверлея,
+     * Вкл/выкл плавающие кнопки Назад/Home. Сам accessibility-сервис остаётся подключённым без оверлея,
      * если он нужен системному действию, назначенному на кнопку руля.
      */
     private void setFloatingBackEnabled(boolean enable) {
@@ -264,7 +268,7 @@ public class SetModesService extends Service {
     }
 
     /**
-     * На пробуждении/загрузке гарантируем плавающую кнопку «Назад», если она включена.
+     * На пробуждении/загрузке гарантируем плавающие кнопки Назад/Home, если они включены.
      * Просто перезапись secure-настройки тем же значением НЕ перебиндивает сервис и не
      * пересоздаёт оверлей (окно снимается при засыпании) — поэтому:
      *  1) если сервис доступности жив → просим его пере-показать оверлей ({@code reshow});
@@ -582,8 +586,11 @@ public class SetModesService extends Service {
 
     private void restoreAutoLightState() {
         boolean autoLight = prefs().getBoolean("autoLight", false);
-        Log.i(TAG, "restoreAutoLightState: autoLight=" + autoLight);
-        if (autoLight) {
+        boolean parkingHeadlights = prefs().getBoolean("headlightsOffInParking",
+                prefs().getBoolean("cacheHeadlightsOffInParking", false));
+        Log.i(TAG, "restoreLightServiceState: autoLight=" + autoLight
+                + " headlightsOffInParking=" + parkingHeadlights);
+        if (autoLight || parkingHeadlights) {
             startLightSensorService();
         }
     }
@@ -649,15 +656,36 @@ public class SetModesService extends Service {
     }
 
     private void startLightSensorService() {
-        Intent intent = new Intent(this, LightSensorService.class);
+        Intent intent = new Intent(this, LightSensorService.class)
+                .setAction(LightSensorService.ACTION_AUTO_LIGHT_CHANGED)
+                .putExtra("enabled", prefs().getBoolean("autoLight", false));
         startForegroundService(intent);
         Log.i(TAG, "LightSensorService started");
+    }
+
+    private void updateLightSensorAutoState(boolean enabled) {
+        Intent intent = new Intent(this, LightSensorService.class)
+                .setAction(LightSensorService.ACTION_AUTO_LIGHT_CHANGED)
+                .putExtra("enabled", enabled);
+        startForegroundService(intent);
+        Log.i(TAG, "LightSensorService autoLight updated: " + enabled);
     }
 
     private void stopLightSensorService() {
         Intent intent = new Intent(this, LightSensorService.class);
         stopService(intent);
         Log.i(TAG, "LightSensorService stopped");
+    }
+
+    private void stopLightSensorServiceIfUnused() {
+        boolean parkingHeadlights = prefs().getBoolean("headlightsOffInParking",
+                prefs().getBoolean("cacheHeadlightsOffInParking", false));
+        if (parkingHeadlights) {
+            updateLightSensorAutoState(false);
+            Log.i(TAG, "LightSensorService kept alive for parking headlight switch");
+            return;
+        }
+        stopLightSensorService();
     }
 
     //private boolean isWorking = false;
@@ -674,6 +702,7 @@ public class SetModesService extends Service {
     private WashModeController washModeController;
     private PowerHoldController powerHoldController;
     private PowerHoldStatusTracker powerHoldStatusTracker;
+    private VehicleStateControllers vehicleStateControllers;
     private boolean powerHoldStatusReceiverRegistered;
     private CarPropertyManager mCarPropertyManager;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -832,6 +861,11 @@ public class SetModesService extends Service {
         powerHoldController = PowerHoldController.create(this);
         powerHoldStatusTracker = PowerHoldStatusTracker.create(
                 this, this::publishPowerHoldStatus);
+        try {
+            vehicleStateControllers = VehicleStateControllers.get(getApplicationContext());
+        } catch (RuntimeException e) {
+            Log.w(TAG, "start vehicle state controllers: " + e.getMessage());
+        }
         try {
             ContextCompat.registerReceiver(this, powerHoldStatusRequestReceiver,
                     new IntentFilter(ACTION_REQUEST_POWER_HOLD_STATUS), BIND_PERMISSION,
@@ -1295,6 +1329,7 @@ public class SetModesService extends Service {
         PowerHoldStatusTracker powerHoldTracker = powerHoldStatusTracker;
         powerHoldStatusTracker = null;
         if (powerHoldTracker != null) powerHoldTracker.close();
+        vehicleStateControllers = null;
         powerHoldController = null;
         releaseCarPowerManagerAsync();
         pendingPhysicalWake = false;

@@ -13,6 +13,13 @@ import java.util.UUID;
 public class SplitStore {
 
     static final String KEY = "splitPresets";
+    /**
+     * Главный предохранитель для интерактивного делителя. Он не меняет настройки отдельных
+     * пресетов: после обратного включения все их выбранные флаги остаются на месте.
+     *
+     * Значение по умолчанию — {@code true}, чтобы обновление не меняло уже настроенное поведение.
+     */
+    static final String KEY_INTERACTIVE_DIVIDER_ENABLED = "splitInteractiveDividerEnabled";
     // 0=3:4, 1=1:1, 2=4:3, 3=5:2, 4=2:5
     static final String[] RATIO_LABELS = {"3:4", "1:1", "4:3", "5:2", "2:5"};
 
@@ -38,6 +45,14 @@ public class SplitStore {
             case 4:  return 2f / 7f;   // 2:5
             default: return 0.5f;      // 1:1
         }
+    }
+
+    static boolean isInteractiveDividerEnabled(SharedPreferences preferences) {
+        return preferences.getBoolean(KEY_INTERACTIVE_DIVIDER_ENABLED, true);
+    }
+
+    static void setInteractiveDividerEnabled(SharedPreferences preferences, boolean enabled) {
+        preferences.edit().putBoolean(KEY_INTERACTIVE_DIVIDER_ENABLED, enabled).apply();
     }
 
     static List<Preset> load(SharedPreferences p) {

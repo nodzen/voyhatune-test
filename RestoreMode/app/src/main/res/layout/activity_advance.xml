@@ -682,23 +682,22 @@
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:gravity="center_vertical"
                     android:layout_marginHorizontal="6dp"
-                    android:layout_marginBottom="8dp">
+                    android:layout_marginBottom="8dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
 
                     <TextView
                         android:id="@+id/drive_modes_text"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:tag="binding_2"
-                        android:text="Сохранять режим вождения"
+                        android:text="Запоминать режим езды"
                         android:textColor="#ffffff"
                         android:textSize="26px" />
 
                     <Switch
-                        android:id="@+id/switchDriveMode"
+                        android:id="@+id/switchRememberDriveMode"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:checked="true"
@@ -706,81 +705,6 @@
                         android:track="@drawable/switch_track" />
 
                 </LinearLayout>
-
-                <RadioGroup
-                    android:id="@+id/drive_modes_group"
-                    style="@style/radio_group_height_70_style"
-                    android:layout_width="match_parent"
-                    android:layout_height="70dp"
-                    android:background="@drawable/radio_group_height_70_bg"
-                    android:orientation="horizontal"
-                    android:layout_marginHorizontal="6dp">
-
-                    <RadioButton
-                        android:id="@+id/ECO"
-                        style="@style/radio_button_height_70_style"
-                        android:layout_width="match_parent"
-                        android:layout_height="match_parent"
-                        android:background="@drawable/radio_group_button_70_bg"
-                        android:tag="ECO"
-                        android:text="Eco"
-                        android:textColor="@color/radio_button_text_color_selector" />
-
-                    <RadioButton
-                        android:id="@+id/COMFORT"
-                        style="@style/radio_button_height_70_style"
-                        android:layout_width="match_parent"
-                        android:layout_height="match_parent"
-                        android:background="@drawable/radio_group_button_70_bg"
-                        android:tag="COMFORT"
-                        android:text="Comf"
-                        android:textColor="@color/radio_button_text_color_selector" />
-
-                    <RadioButton
-                        android:id="@+id/SPORT"
-                        style="@style/radio_button_height_70_style"
-                        android:layout_width="match_parent"
-                        android:layout_height="match_parent"
-                        android:background="@drawable/radio_group_button_70_bg"
-                        android:tag="SPORT"
-                        android:text="Sport"
-                        android:textColor="@color/radio_button_text_color_selector" />
-
-                    <RadioButton
-                        android:id="@+id/OUTING"
-                        style="@style/radio_button_height_70_style"
-                        android:layout_width="match_parent"
-                        android:layout_height="match_parent"
-                        android:layout_weight="1"
-                        android:animateLayoutChanges="true"
-                        android:background="@drawable/radio_group_button_70_bg"
-                        android:tag="OUTING"
-                        android:text="Outing"
-                        android:textColor="@color/radio_button_text_color_selector" />
-
-                    <RadioButton
-                        android:id="@+id/SNOW"
-                        style="@style/radio_button_height_70_style"
-                        android:layout_width="match_parent"
-                        android:layout_height="match_parent"
-                        android:layout_weight="1"
-                        android:background="@drawable/radio_group_button_70_bg"
-                        android:tag="SNOW"
-                        android:text="Snow"
-                        android:textColor="@color/radio_button_text_color_selector" />
-
-                    <RadioButton
-                        android:id="@+id/INDIVIDUAL"
-                        style="@style/radio_button_height_70_style"
-                        android:layout_width="match_parent"
-                        android:layout_height="match_parent"
-                        android:layout_weight="1"
-                        android:background="@drawable/radio_group_button_70_bg"
-                        android:tag="INDIVIDUAL"
-                        android:text="Indiv"
-                        android:textColor="@color/radio_button_text_color_selector" />
-
-                </RadioGroup>
             </LinearLayout>
 
             <!-- Ароматизатор: отдельная opt-in настройка, применяется только при ручном
@@ -1008,22 +932,12 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:tag="binding_2"
-                        android:text="Сохранять режим энергии"
+                        android:text="Запоминать режим энергии"
                         android:textColor="#ffffff"
                         android:textSize="26px" />
 
-                    <CheckBox
-                        android:id="@+id/checkBox34"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginEnd="16dp"
-                        android:onClick="onCheckBox34Click"
-                        android:text="3 кнопки"
-                        android:textColor="#ffffffff"
-                        android:textSize="26px" />
-
                     <Switch
-                        android:id="@+id/switchEnergy"
+                        android:id="@+id/switchRememberEnergyMode"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:checked="true"
@@ -1031,57 +945,6 @@
                         android:track="@drawable/switch_track" />
 
                 </LinearLayout>
-
-                <RadioGroup
-                    android:id="@+id/energy_modes_group"
-                    style="@style/radio_group_height_70_style"
-                    android:layout_width="match_parent"
-                    android:layout_height="70dp"
-                    android:background="@drawable/radio_group_height_70_bg"
-                    android:orientation="horizontal"
-                    android:layout_marginHorizontal="6dp">
-
-                    <RadioButton
-                        android:id="@+id/SMART"
-                        style="@style/radio_button_height_70_style"
-                        android:layout_width="match_parent"
-                        android:layout_height="match_parent"
-                        android:background="@drawable/radio_group_button_70_bg"
-                        android:tag="SMART"
-                        android:text="Intelligent"
-                        android:textColor="@color/radio_button_text_color_selector" />
-
-                    <RadioButton
-                        android:id="@+id/EV"
-                        style="@style/radio_button_height_70_style"
-                        android:layout_width="match_parent"
-                        android:layout_height="match_parent"
-                        android:background="@drawable/radio_group_button_70_bg"
-                        android:tag="EV"
-                        android:text="Electric"
-                        android:textColor="@color/radio_button_text_color_selector" />
-
-                    <RadioButton
-                        android:id="@+id/REV"
-                        style="@style/radio_button_height_70_style"
-                        android:layout_width="match_parent"
-                        android:layout_height="match_parent"
-                        android:background="@drawable/radio_group_button_70_bg"
-                        android:tag="REV"
-                        android:text="Fuel mode"
-                        android:textColor="@color/radio_button_text_color_selector" />
-
-                    <RadioButton
-                        android:id="@+id/SREV"
-                        style="@style/radio_button_height_70_style"
-                        android:layout_width="match_parent"
-                        android:layout_height="match_parent"
-                        android:background="@drawable/radio_group_button_70_bg"
-                        android:tag="SREV"
-                        android:text="Save mode"
-                        android:textColor="@color/radio_button_text_color_selector" />
-
-                </RadioGroup>
             </LinearLayout>
 
             <!-- Рекуперация -->
@@ -1107,12 +970,12 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:tag="binding_2"
-                        android:text="Сохранять уровень рекуперации"
+                        android:text="Запоминать рекуперацию"
                         android:textColor="#ffffff"
                         android:textSize="26px" />
 
                     <Switch
-                        android:id="@+id/switchRecycle"
+                        android:id="@+id/switchRememberRecycleMode"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:checked="true"
@@ -1120,47 +983,6 @@
                         android:track="@drawable/switch_track" />
 
                 </LinearLayout>
-
-                <RadioGroup
-                    android:id="@+id/recycle_modes_group"
-                    style="@style/radio_group_height_70_style"
-                    android:layout_width="match_parent"
-                    android:layout_height="70dp"
-                    android:background="@drawable/radio_group_height_70_bg"
-                    android:orientation="horizontal"
-                    android:layout_marginHorizontal="6dp">
-
-                    <RadioButton
-                        android:id="@+id/LOW"
-                        style="@style/radio_button_height_70_style"
-                        android:layout_width="match_parent"
-                        android:layout_height="match_parent"
-                        android:background="@drawable/radio_group_button_70_bg"
-                        android:tag="LOW"
-                        android:text="Низкий"
-                        android:textColor="@color/radio_button_text_color_selector" />
-
-                    <RadioButton
-                        android:id="@+id/MEDIUM"
-                        style="@style/radio_button_height_70_style"
-                        android:layout_width="match_parent"
-                        android:layout_height="match_parent"
-                        android:background="@drawable/radio_group_button_70_bg"
-                        android:tag="MEDIUM"
-                        android:text="Стандартный"
-                        android:textColor="@color/radio_button_text_color_selector" />
-
-                    <RadioButton
-                        android:id="@+id/HIGH"
-                        style="@style/radio_button_height_70_style"
-                        android:layout_width="match_parent"
-                        android:layout_height="match_parent"
-                        android:background="@drawable/radio_group_button_70_bg"
-                        android:tag="HIGH"
-                        android:text="Высокий"
-                        android:textColor="@color/radio_button_text_color_selector" />
-
-                </RadioGroup>
             </LinearLayout>
 
             <!-- Предупреждение пешеходов (перенесено с главного экрана) -->
@@ -1440,6 +1262,50 @@
 
             </LinearLayout>
 
+            <!-- Гасить фары в Parking -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="5dp"
+                android:layout_marginTop="10dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:background="@drawable/layout_category_bg"
+                android:paddingHorizontal="16dp"
+                android:paddingVertical="8dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Выключать фары в режиме парковки"
+                        android:textColor="#FFFFFF"
+                        android:textSize="26px" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="При выборе P отправлять команду выключения наружного света."
+                        android:textColor="#888888"
+                        android:textSize="20px" />
+
+                </LinearLayout>
+
+                <Switch
+                    android:id="@+id/switchHeadlightsOffInParking"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:thumb="@drawable/switch_thumb"
+                    android:track="@drawable/switch_track" />
+
+            </LinearLayout>
+
             <!-- Сервисный режим дворников в холодную погоду (перенесено из «Комфорт») -->
             <LinearLayout
                 android:layout_width="match_parent"
@@ -1648,7 +1514,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
-                    android:text="Переопределить приложения в слотах 1 и 2 водительского дока системного лаунчера. Долгое нажатие по слоту может открыть назначенный сплит, а долгое нажатие на кнопку настройки сбрасывает слот. Пассажирский док остаётся штатным."
+                    android:text="Настройка двух кнопок центрального экрана: «Звонок» и «Радио». Короткое нажатие может открывать выбранное приложение, долгое — выполнять отдельное действие: split, приложение, режим автомобиля и другие функции. Долгое нажатие на кнопку короткого действия восстанавливает штатное приложение. Климат, настройки машины, Home, Apps и пассажирский экран остаются штатными."
                     android:textColor="#888888"
                     android:textSize="20px" />
 
@@ -1667,7 +1533,7 @@
                     android:layout_marginTop="12dp"
                     android:backgroundTint="#373f4a"
                     android:onClick="onPickDockApp1"
-                    android:text="Приложение 1: не выбрано"
+                    android:text="Звонок: штатное"
                     android:textColor="#FFFFFF"
                     android:textSize="22dp"
                     android:singleLine="true"
@@ -1681,7 +1547,7 @@
                     android:layout_marginStart="24dp"
                     android:backgroundTint="#2b323c"
                     android:onClick="onPickDockSplit1"
-                    android:text="Сплит по долгому нажатию: не выбран"
+                    android:text="Долгое действие (Звонок): штатное"
                     android:textColor="#dddddd"
                     android:textSize="20dp"
                     android:singleLine="true"
@@ -1695,7 +1561,7 @@
                     android:layout_marginTop="8dp"
                     android:backgroundTint="#373f4a"
                     android:onClick="onPickDockApp2"
-                    android:text="Приложение 2: не выбрано"
+                    android:text="Радио: штатное"
                     android:textColor="#FFFFFF"
                     android:textSize="22dp"
                     android:singleLine="true"
@@ -1709,7 +1575,7 @@
                     android:layout_marginStart="24dp"
                     android:backgroundTint="#2b323c"
                     android:onClick="onPickDockSplit2"
-                    android:text="Сплит по долгому нажатию: не выбран"
+                    android:text="Долгое действие (Радио): штатное"
                     android:textColor="#dddddd"
                     android:textSize="20dp"
                     android:singleLine="true"
@@ -1724,6 +1590,126 @@
 
             </LinearLayout>
 
+            <!-- Blacklist настоящей заморозки OEM/пользовательских приложений -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Blacklist заморозки приложений"
+                android:textColor="#FFFFFF"
+                android:textSize="28px" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="Выберите приложения в blacklist и включите тумблер. Они будут полностью остановлены и отключены: не показываются в лаунчере и не имеют фоновой активности. APK и данные не удаляются, восстановление обратимо. Штатное радио, звонки и автомобильные службы защищены."
+                android:textColor="#888888"
+                android:textSize="20px" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:background="@drawable/layout_category_bg"
+                android:paddingHorizontal="16dp"
+                android:paddingVertical="10dp">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Заморозка приложений"
+                    android:textColor="#FFFFFF"
+                    android:textSize="24px" />
+
+                <Switch
+                    android:id="@+id/switchFrozenApps"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:contentDescription="Включить заморозку приложений"
+                    android:thumb="@drawable/switch_thumb"
+                    android:track="@drawable/switch_track" />
+
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/frozenAppsContainer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+
+            <Button
+                android:id="@+id/buttonManageFrozenApps"
+                android:layout_width="match_parent"
+                android:layout_height="70dp"
+                android:layout_marginTop="14dp"
+                android:backgroundTint="#2f7fd0"
+                android:onClick="onManageFrozenApps"
+                android:text="Заморозить приложения"
+                android:textColor="#FFFFFF"
+                android:textSize="24dp"
+                app:cornerRadius="20dp" />
+
+            <Button
+                android:id="@+id/buttonRestoreFrozenApps"
+                android:layout_width="match_parent"
+                android:layout_height="70dp"
+                android:layout_marginTop="10dp"
+                android:backgroundTint="#4b5563"
+                android:onClick="onRestoreFrozenApps"
+                android:text="Разморозить все приложения"
+                android:textColor="#FFFFFF"
+                android:textSize="24dp"
+                app:cornerRadius="20dp" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginVertical="24dp"
+                android:background="#373f4a" />
+
+            <!-- Приложения, которым разрешён настоящий полноэкранный режим -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Полноэкранные приложения"
+                android:textColor="#FFFFFF"
+                android:textSize="28px" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="Выбранные приложения открываются на всю ширину физического экрана без отступа от дока, но ниже статус-бара. Системный док скрывается, а плавающие кнопки «Назад» и Home показываются автоматически."
+                android:textColor="#888888"
+                android:textSize="20px" />
+
+            <LinearLayout
+                android:id="@+id/fullscreenAppsContainer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+
+            <Button
+                android:id="@+id/buttonAddFullscreenApp"
+                android:layout_width="match_parent"
+                android:layout_height="70dp"
+                android:layout_marginTop="14dp"
+                android:backgroundTint="#2f7fd0"
+                android:onClick="onAddFullscreenApp"
+                android:text="＋ Добавить приложение"
+                android:textColor="#FFFFFF"
+                android:textSize="24dp"
+                app:cornerRadius="20dp" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginVertical="24dp"
+                android:background="#373f4a" />
+
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -1731,6 +1717,22 @@
                 android:text="Настройте несколько сплитов: в каждом — два приложения и соотношение (3:4 / 1:1 / 4:3 / 5:2 / 2:5). Каждый сплит с выбранными приложениями появится плиткой на главном экране."
                 android:textColor="#888888"
                 android:textSize="20px" />
+
+            <Switch
+                android:id="@+id/splitInteractiveDividerSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text="Интерактивный разделитель"
+                android:textColor="#FFFFFF"
+                android:textSize="24px" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Разрешает тянуть среднюю полосу в отмеченных сплитах. Для каждого пресета ниже можно отдельно включить «Изменяемую пропорцию». При выключении уже выбранные настройки сохраняются, но перетаскивание безопасно отключается."
+                android:textColor="#888888"
+                android:textSize="18px" />
 
             <!-- Динамический список пресетов (item_split_preset) -->
             <LinearLayout
@@ -2466,7 +2468,7 @@
 
         </LinearLayout>
 
-        <!-- Плавающая кнопка «Назад»: тумблер + положение (единый блок) -->
+        <!-- Плавающие кнопки «Назад»/Home: тумблер + положение (единый блок) -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -2492,14 +2494,14 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Плавающая кнопка «Назад»"
+                        android:text="Плавающие кнопки «Назад» и Home"
                         android:textColor="#FFFFFF"
                         android:textSize="26px" />
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Кнопка поверх интерфейса; вызывает системное «Назад»"
+                        android:text="Кнопки поверх интерфейса; вызывают системные «Назад» и Home"
                         android:textColor="#888888"
                         android:textSize="20px" />
 
@@ -2514,12 +2516,12 @@
 
             </LinearLayout>
 
-            <!-- Положение кнопки -->
+            <!-- Положение блока кнопок -->
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
-                android:text="Положение кнопки"
+                android:text="Положение блока кнопок"
                 android:textColor="#FFFFFF"
                 android:textSize="24px" />
 
@@ -2571,7 +2573,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:text="Потяните кнопку вдоль выбранной стороны, чтобы изменить положение — оно запомнится"
+                android:text="Потяните любую кнопку вдоль выбранной стороны, чтобы изменить положение блока — оно запомнится"
                 android:textColor="#888888"
                 android:textSize="20px" />
 
@@ -2693,7 +2695,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="16dp"
-                android:text="Назначь действие на короткое и долгое нажатие кнопок руля. «Не менять» — штатное системное поведение. Долгое нажатие срабатывает по удержанию (~0.6 с), не дожидаясь отпускания. Перехват работает через frida (только сборка full)."
+                android:text="На короткое и долгое нажатие можно назначить несколько действий. Они выполняются сверху вниз; порядок показан номерами. Пустой список сохраняет штатное системное поведение. Долгое нажатие срабатывает по удержанию (~0.6 с), не дожидаясь отпускания. Перехват работает через frida (только сборка full)."
                 android:textColor="#888888"
                 android:textSize="20px" />
 
@@ -2727,11 +2729,18 @@
                     android:layout_marginTop="6dp"
                     android:backgroundTint="#373f4a"
                     android:onClick="onPickSteerStarShort"
-                    android:text="Не менять"
+                    android:text="+ Добавить действие"
                     android:textColor="#FFFFFF"
                     android:textSize="22dp"
                     android:singleLine="true"
+                    android:textAllCaps="false"
                     app:cornerRadius="20dp" />
+
+                <LinearLayout
+                    android:id="@+id/steerStarShortList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
 
                 <TextView
                     android:layout_width="wrap_content"
@@ -2748,11 +2757,18 @@
                     android:layout_marginTop="6dp"
                     android:backgroundTint="#373f4a"
                     android:onClick="onPickSteerStarLong"
-                    android:text="Не менять"
+                    android:text="+ Добавить действие"
                     android:textColor="#FFFFFF"
                     android:textSize="22dp"
                     android:singleLine="true"
+                    android:textAllCaps="false"
                     app:cornerRadius="20dp" />
+
+                <LinearLayout
+                    android:id="@+id/steerStarLongList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
 
             </LinearLayout>
 
@@ -2787,11 +2803,18 @@
                     android:layout_marginTop="6dp"
                     android:backgroundTint="#373f4a"
                     android:onClick="onPickSteerDvrShort"
-                    android:text="Не менять"
+                    android:text="+ Добавить действие"
                     android:textColor="#FFFFFF"
                     android:textSize="22dp"
                     android:singleLine="true"
+                    android:textAllCaps="false"
                     app:cornerRadius="20dp" />
+
+                <LinearLayout
+                    android:id="@+id/steerDvrShortList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
 
                 <TextView
                     android:layout_width="wrap_content"
@@ -2808,11 +2831,18 @@
                     android:layout_marginTop="6dp"
                     android:backgroundTint="#373f4a"
                     android:onClick="onPickSteerDvrLong"
-                    android:text="Не менять"
+                    android:text="+ Добавить действие"
                     android:textColor="#FFFFFF"
                     android:textSize="22dp"
                     android:singleLine="true"
+                    android:textAllCaps="false"
                     app:cornerRadius="20dp" />
+
+                <LinearLayout
+                    android:id="@+id/steerDvrLongList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
 
             </LinearLayout>
 
@@ -2821,6 +2851,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
                 android:text="Кнопка голосового помощника"
                 android:textColor="#FFFFFF"
                 android:textSize="26px" />
@@ -2847,11 +2878,18 @@
                     android:layout_marginTop="6dp"
                     android:backgroundTint="#373f4a"
                     android:onClick="onPickSteerVoiceShort"
-                    android:text="Не менять"
+                    android:text="+ Добавить действие"
                     android:textColor="#FFFFFF"
                     android:textSize="22dp"
                     android:singleLine="true"
+                    android:textAllCaps="false"
                     app:cornerRadius="20dp" />
+
+                <LinearLayout
+                    android:id="@+id/steerVoiceShortList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
 
                 <TextView
                     android:layout_width="wrap_content"
@@ -2868,11 +2906,18 @@
                     android:layout_marginTop="6dp"
                     android:backgroundTint="#373f4a"
                     android:onClick="onPickSteerVoiceLong"
-                    android:text="Не менять"
+                    android:text="+ Добавить действие"
                     android:textColor="#FFFFFF"
                     android:textSize="22dp"
                     android:singleLine="true"
+                    android:textAllCaps="false"
                     app:cornerRadius="20dp" />
+
+                <LinearLayout
+                    android:id="@+id/steerVoiceLongList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
 
             </LinearLayout>
 
@@ -2881,6 +2926,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
                 android:text="Кнопка трубка"
                 android:textColor="#FFFFFF"
                 android:textSize="26px" />
@@ -2907,11 +2953,18 @@
                     android:layout_marginTop="6dp"
                     android:backgroundTint="#373f4a"
                     android:onClick="onPickSteerPhoneShort"
-                    android:text="Не менять"
+                    android:text="+ Добавить действие"
                     android:textColor="#FFFFFF"
                     android:textSize="22dp"
                     android:singleLine="true"
+                    android:textAllCaps="false"
                     app:cornerRadius="20dp" />
+
+                <LinearLayout
+                    android:id="@+id/steerPhoneShortList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
 
                 <TextView
                     android:layout_width="wrap_content"
@@ -2928,11 +2981,18 @@
                     android:layout_marginTop="6dp"
                     android:backgroundTint="#373f4a"
                     android:onClick="onPickSteerPhoneLong"
-                    android:text="Не менять"
+                    android:text="+ Добавить действие"
                     android:textColor="#FFFFFF"
                     android:textSize="22dp"
                     android:singleLine="true"
+                    android:textAllCaps="false"
                     app:cornerRadius="20dp" />
+
+                <LinearLayout
+                    android:id="@+id/steerPhoneLongList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
 
             </LinearLayout>
 

@@ -6,14 +6,14 @@ plugins {
 
 android {
     namespace = "ru.big.town.restoremode"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "ru.big.town.restoremode"
         minSdk = 30
-        targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        targetSdk = 36
+        versionCode = 30806
+        versionName = "3.8.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         multiDexEnabled = true
@@ -74,7 +74,7 @@ android {
         includeInApk = true
         includeInBundle = true
     }
-    ndkVersion = "27.0.12077973"
+    ndkVersion = "29.0.14206865"
 
 }
 

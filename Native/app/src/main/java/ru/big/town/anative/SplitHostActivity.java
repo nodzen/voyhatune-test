@@ -62,11 +62,8 @@ public class SplitHostActivity extends Activity {
 
     private static final String TAG = "$$$ SplitHostActivity $$$";
 
-    /**
-     * Временный feature gate: код изменения пропорции и сохранённые значения остаются на месте,
-     * но drag жест делителя отключён до отдельной проверки на автомобиле.
-     */
-    private static final boolean DIVIDER_RESIZE_GESTURE_ENABLED = false;
+    /** Жест изменения пропорции включается отдельно для каждого split-пресета. */
+    private static final boolean DIVIDER_RESIZE_GESTURE_ENABLED = true;
 
     private static final String ACTION_SCREEN_LIFT_CHANGED = "action.qg.layout.changed";
     private static final String SCREEN_LIFT_SETTING = "voyahtune_screen_lift_type";
@@ -164,6 +161,7 @@ public class SplitHostActivity extends Activity {
     private final Pane left  = new Pane("L");
     private final Pane right = new Pane("R");
 
+    @SuppressWarnings("deprecation")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
