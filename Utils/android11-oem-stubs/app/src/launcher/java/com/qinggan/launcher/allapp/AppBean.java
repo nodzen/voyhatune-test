@@ -1,5 +1,7 @@
 package com.qinggan.launcher.allapp;
 
+import android.graphics.drawable.Drawable;
+
 import java.util.List;
 
 /** Synthetic H97C OD AppBean surface used by launcherdock.js. */
@@ -9,11 +11,21 @@ public class AppBean {
     private final String packageName;
     private final int type;
     private List<Object> appBeans;
+    private String appName;
+    private Drawable dynamicDrawable;
     private String subType;
 
     public AppBean(int icon, int nameRes, String packageName) {
         this.icon = icon;
         this.nameRes = nameRes;
+        this.packageName = packageName;
+        this.type = 1;
+    }
+
+    public AppBean(int icon, String appName, String packageName) {
+        this.icon = icon;
+        this.nameRes = 0;
+        this.appName = appName;
         this.packageName = packageName;
         this.type = 1;
     }
@@ -28,6 +40,22 @@ public class AppBean {
 
     public String getPackageName() {
         return packageName;
+    }
+
+    public String getAppName() {
+        return appName;
+    }
+
+    public Drawable getDynamicDrawable() {
+        return dynamicDrawable;
+    }
+
+    public boolean isDynamicApp() {
+        return appName != null;
+    }
+
+    public void setDynamicDrawable(Drawable dynamicDrawable) {
+        this.dynamicDrawable = dynamicDrawable;
     }
 
     public int getType() {

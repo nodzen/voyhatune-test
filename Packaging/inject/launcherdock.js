@@ -866,31 +866,23 @@ Java.perform(function () {
             var iconCache = {};
             var labelCache = {};
             var packageRefreshTimer = null;
-            // The adapter bind hook is unavoidable for synthetic entries, but it must not do a
-            // reflection + Java.cast for every stock tile while the user scrolls. The list identity
-            // tells us where the synthetic suffix starts; this map is populated only when getAllApps
-            // builds/refreshes the list.
+            // The map is only needed by the optional passenger home rail. The full-screen launcher
+            // uses the native dynamic AppBean renderer and therefore has no scroll-time JS hook.
             var syntheticStartByList = {};
-            // RecyclerView continuously rebinds the same holders while the user swipes. Keep the
-            // backing list lookup on the Java side only once per adapter generation; otherwise even
-            // a stock tile crosses the Frida bridge for field lookup + identityHashCode every frame.
-            // The cache is dropped whenever getAllApps rebuilds either OEM list.
-            var adapterMetadataByIdentity = {};
-            // The OEM adapter recreates many inexpensive but numerous tile holders during a fast
-            // swipe. A single bounded cache on the driver All Apps RecyclerView retains the small
-            // 21–32 item list and removes those synchronous inflations from the gesture path.
-            var ALL_APPS_VIEW_CACHE_SIZE = 32;
-            var allAppsRecyclerCacheTuned = false;
-            var allAppsRecyclerCacheAttempts = 0;
-            var AllAppsRecyclerView = null;
-            try { AllAppsRecyclerView = Java.use("androidx.recyclerview.widget.RecyclerView"); }
-            catch (androidxMissing) {
-                try { AllAppsRecyclerView = Java.use("android.support.v7.widget.RecyclerView"); }
-                catch (supportMissing) {}
-            }
             var FLAG_SYSTEM = 0x00000001;
             var SYNTHETIC_PREFIX = "__voyahtune_allapps__:";
             var resourceTemplate = null;
+            // H97C AppBean natively supports a dynamic label and Drawable. Populate those fields
+            // once when the OEM list is made, instead of intercepting every RecyclerView bind.
+            // The legacy family retains the old renderer as a compatibility fallback.
+            var nativeDynamicApps = false;
+            try {
+                AppBean.$init.overload('int', 'java.lang.String', 'java.lang.String');
+                AppBean.setDynamicDrawable.overload('android.graphics.drawable.Drawable');
+                nativeDynamicApps = true;
+            } catch (dynamicAppUnsupported) {}
+            Log.i(TAG, "[allapps] renderer="
+                    + (nativeDynamicApps ? "native-dynamic" : "legacy-post-bind"));
 
             function packageFromIntent(intent) {
                 if (intent === null) return "";
@@ -989,10 +981,7 @@ Java.perform(function () {
                 return installedSnapshot;
             }
 
-            // OEM bind безусловно вызывает Resources.getText(nameRes) и SkinResourceManager.getDrawable(icon).
-            // AppBean(0, 0, pkg), который использовал voboost, поэтому падает ещё до нашего post-bind.
-            // Берём валидные placeholder-ресурсы из первого штатного app-bean, а после OEM bind заменяем
-            // их настоящими label/icon целевого пакета.
+            // Only the legacy renderer needs OEM resource IDs before its post-bind replacement.
             function findAppTemplate(list) {
                 if (list === null || list === undefined) return resourceTemplate;
                 for (var i = 0; i < list.size(); i++) {
@@ -1025,18 +1014,28 @@ Java.perform(function () {
                     var pkg = apps[j];
                     if (existing["pkg:" + pkg]) continue;
                     try {
-                        if (template === null) template = findAppTemplate(list);
-                        // На редкой конфигурации passenger OEM-list может быть пустым. Ресурсы обоих
-                        // списков принадлежат одному launcher-base APK, поэтому безопасно взять шаблон
-                        // из main list, вызвав именно оригинальный getAllApps без рекурсии в hook.
-                        if (template === null && getAll !== null && getAll !== undefined) {
-                            template = findAppTemplate(getAll.call(Data, 0));
+                        var bean;
+                        if (nativeDynamicApps) {
+                            // AppBean's dynamic constructor makes the OEM adapter read appName and
+                            // dynamicDrawable itself. This work happens during list construction,
+                            // never during a RecyclerView frame.
+                            var label = "" + pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0));
+                            var icon = pm.getApplicationIcon(pkg);
+                            bean = AppBean.$new(0, JavaString.$new(label), pkg);
+                            bean.setDynamicDrawable(icon);
+                        } else {
+                            // The older launcher does not expose the dynamic AppBean contract; its
+                            // post-bind fallback below needs valid OEM resource IDs to remain safe.
+                            if (template === null) template = findAppTemplate(list);
+                            if (template === null && getAll !== null && getAll !== undefined) {
+                                template = findAppTemplate(getAll.call(Data, 0));
+                            }
+                            if (template === null) {
+                                Log.e(TAG, "[allapps] no valid OEM app template; cannot safely add " + pkg);
+                                return;
+                            }
+                            bean = AppBean.$new(template.icon, template.name, pkg);
                         }
-                        if (template === null) {
-                            Log.e(TAG, "[allapps] no valid OEM app template; cannot safely add " + pkg);
-                            return;
-                        }
-                        var bean = AppBean.$new(template.icon, template.name, pkg);
                         bean.setSubType(SYNTHETIC_PREFIX + pkg);
                         list.add(bean);
                         existing["pkg:" + pkg] = true;
@@ -1072,47 +1071,13 @@ Java.perform(function () {
                 }
             }
 
-            function adapterIdentity(adapter) {
-                try { return "adapter:" + JavaSystem.identityHashCode(adapter); }
-                catch (ignored) { return ""; }
-            }
-
-            function clearAdapterMetadata() {
-                adapterMetadataByIdentity = {};
-            }
-
             invalidateAllAppsCaches = function () {
                 installedSnapshot = null;
                 syntheticStartByList = {};
-                clearAdapterMetadata();
-            };
-
-            function adapterMetadata(adapter) {
-                var identity = adapterIdentity(adapter);
-                var cached = identity ? adapterMetadataByIdentity[identity] : null;
-                if (cached !== null && cached !== undefined) {
-                    if (cached.syntheticStart < 0) {
-                        var knownStart = syntheticStartByList[cached.listIdentity];
-                        if (knownStart !== undefined) cached.syntheticStart = knownStart;
-                    }
-                    return cached;
-                }
-                var beans = adapterBeans(adapter);
-                if (beans === null) return null;
-                var listIdentity = listKey(beans);
-                var start = syntheticStartByList[listIdentity];
-                var metadata = {
-                    beans: beans,
-                    listIdentity: listIdentity,
-                    syntheticStart: start === undefined ? -1 : start
-                };
-                if (identity) adapterMetadataByIdentity[identity] = metadata;
-                return metadata;
             }
 
-            function beanAt(adapter, position, metadata) {
-                var state = metadata || adapterMetadata(adapter);
-                var beans = state !== null ? state.beans : null;
+            function beanAt(adapter, position) {
+                var beans = adapterBeans(adapter);
                 if (beans === null || position < 0 || position >= beans.size()) return null;
                 return Java.cast(beans.get(position), AppBean);
             }
@@ -1125,15 +1090,6 @@ Java.perform(function () {
                     } catch (ignored) {}
                 }
                 return list.size();
-            }
-
-            function mayContainSynthetic(adapter, position, metadata) {
-                var state = metadata || adapterMetadata(adapter);
-                if (state === null) return true;
-                var start = state.syntheticStart;
-                // Unknown list metadata is handled conservatively; known stock prefixes take the
-                // fast path and never cross the JS/Java reflection bridge during scrolling.
-                return start < 0 || position >= start;
             }
 
             function syntheticPackage(bean) {
@@ -1192,38 +1148,8 @@ Java.perform(function () {
                 return (screenId === 0 || screenId === 1) ? screenId : -1;
             }
 
-            /**
-             * Runs at most twelve times while the list is being attached. Once a RecyclerView is
-             * found, no scroll-time work is added. View caching is an Android framework feature;
-             * it preserves OEM bind/click/drag semantics and only avoids recreating off-screen
-             * holders which this launcher otherwise inflates again on every quick page swipe.
-             */
-            function tuneAllAppsRecyclerCache(holder) {
-                if (allAppsRecyclerCacheTuned || allAppsRecyclerCacheAttempts >= 12
-                        || AllAppsRecyclerView === null) return;
-                allAppsRecyclerCacheAttempts++;
-                try {
-                    var itemView = null;
-                    try { itemView = holder.itemView.value; } catch (direct) {}
-                    if (itemView === null || itemView === undefined) itemView = fieldValue(holder, "itemView");
-                    if (itemView === null || itemView === undefined) return;
-                    var parent = itemView.getParent();
-                    if (parent === null) return;
-                    var recycler = Java.cast(parent, AllAppsRecyclerView);
-                    recycler.setItemViewCacheSize(ALL_APPS_VIEW_CACHE_SIZE);
-                    allAppsRecyclerCacheTuned = true;
-                    Log.i(TAG, "[allapps] RecyclerView holder cache=" + ALL_APPS_VIEW_CACHE_SIZE);
-                } catch (ignored) {
-                    // The holder can be bound before attachment, or this firmware can use a custom
-                    // parent. Retry a few early binds, then leave stock RecyclerView behavior intact.
-                }
-            }
-
             function finishBoundItem(adapter, holder, position) {
-                tuneAllAppsRecyclerCache(holder);
-                var metadata = adapterMetadata(adapter);
-                if (!mayContainSynthetic(adapter, position, metadata)) return;
-                var bean = beanAt(adapter, position, metadata);
+                var bean = beanAt(adapter, position);
                 var pkg = syntheticPackage(bean);
                 if (pkg === null) return;
                 var icon = loadIcon(pkg);
@@ -1262,28 +1188,30 @@ Java.perform(function () {
                 return allAppClick.call(this, view);
             };
 
-            var bind = Adapter.onBindViewHolder.overload(
-                    allAppsAbi.adapter + '$AppViewHolder', 'int');
-            bind.implementation = function (holder, position) {
-                bind.call(this, holder, position);
-                try {
-                    finishBoundItem(this, holder, position);
-                } catch (e) { Log.e(TAG, "[allapps] bind: " + e); }
-            };
-
-            // Theme/state refreshes use the payload overload and can overwrite the real icon with the
-            // placeholder. Re-apply the custom presentation after every such OEM update as well.
-            try {
-                var bindPayload = Adapter.onBindViewHolder.overload(
-                        allAppsAbi.adapter + '$AppViewHolder',
-                        'int', 'java.util.List');
-                bindPayload.implementation = function (holder, position, payloads) {
-                    bindPayload.call(this, holder, position, payloads);
+            if (!nativeDynamicApps) {
+                // Compatibility only: the old ABI has no native dynamic AppBean. H97C never
+                // enters this block, so stock tiles do not cross Frida while the list is scrolled.
+                var bind = Adapter.onBindViewHolder.overload(
+                        allAppsAbi.adapter + '$AppViewHolder', 'int');
+                bind.implementation = function (holder, position) {
+                    bind.call(this, holder, position);
                     try {
                         finishBoundItem(this, holder, position);
-                    } catch (e) { Log.e(TAG, "[allapps] payload bind: " + e); }
+                    } catch (e) { Log.e(TAG, "[allapps] bind: " + e); }
                 };
-            } catch (e) { Log.e(TAG, "[allapps] payload bind hook unavailable: " + e); }
+
+                try {
+                    var bindPayload = Adapter.onBindViewHolder.overload(
+                            allAppsAbi.adapter + '$AppViewHolder',
+                            'int', 'java.util.List');
+                    bindPayload.implementation = function (holder, position, payloads) {
+                        bindPayload.call(this, holder, position, payloads);
+                        try {
+                            finishBoundItem(this, holder, position);
+                        } catch (e) { Log.e(TAG, "[allapps] payload bind: " + e); }
+                    };
+                } catch (e) { Log.e(TAG, "[allapps] payload bind hook unavailable: " + e); }
+            }
 
             // На части OD launcher пассажирская home-лента читает тот же mSecondAllApps через отдельный
             // SecondAllAppAdapter. Если класс присутствует, его тоже надо декорировать и перехватить
@@ -1346,7 +1274,6 @@ Java.perform(function () {
                     filterFrozenApps(list);
                     addMissingApps(list);
                     syntheticStartByList[listKey(list)] = syntheticStartInList(list);
-                    clearAdapterMetadata();
                 }
                 return list;
             };

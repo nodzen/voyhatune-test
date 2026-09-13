@@ -110,8 +110,8 @@ for launcher_lifecycle in \
         "$launcher_lifecycle"
 done
 
-# Full All Apps is a primary part of launcherdock.js now: both physical lists, both bind overloads,
-# owner-screen click routing, package-driven reload, and the optional OD passenger home rail.
+# Full All Apps is a primary part of launcherdock.js now: both physical lists, native dynamic
+# AppBeans, owner-screen click routing, package-driven reload, and the optional passenger home rail.
 for allapps_class in \
     'com.qinggan.launcher.allapp.AppBean' \
     'com.qinggan.launcher.allapp.AllAppDataManager' \
@@ -131,6 +131,8 @@ require_text "$AGENT_ROOT/launcherdock.js" "Data.getAllApps.overload('int')"
 require_text "$AGENT_ROOT/launcherdock.js" 'Data.reload.overload()'
 require_text "$AGENT_ROOT/launcherdock.js" "AllAppBarView.onClick.overload('android.view.View')"
 require_text "$AGENT_ROOT/launcherdock.js" 'AppLauncher.startApp(ctx(), intent, screenId)'
+require_text "$AGENT_ROOT/launcherdock.js" 'var nativeDynamicApps = false;'
+require_text "$AGENT_ROOT/launcherdock.js" 'bean.setDynamicDrawable(icon);'
 require_text "$AGENT_ROOT/launcherdock.js" "allAppsAbi.adapter + '\$AppViewHolder', 'int'"
 require_text "$AGENT_ROOT/launcherdock.js" "'int', 'java.util.List'"
 for package_action in PACKAGE_ADDED PACKAGE_REMOVED PACKAGE_CHANGED; do
@@ -140,9 +142,14 @@ require_text "$AGENT_ROOT/launcherdock.js" 'packageFilter.addDataScheme("package
 
 for appbean_method in \
     'AppBean(int icon, int nameRes, String packageName)' \
+    'AppBean(int icon, String appName, String packageName)' \
     'int getIcon()' \
     'int getNameRes()' \
     'String getPackageName()' \
+    'String getAppName()' \
+    'Drawable getDynamicDrawable()' \
+    'boolean isDynamicApp()' \
+    'void setDynamicDrawable(Drawable dynamicDrawable)' \
     'int getType()' \
     'String getSubType()' \
     'void setSubType(String subType)'; do

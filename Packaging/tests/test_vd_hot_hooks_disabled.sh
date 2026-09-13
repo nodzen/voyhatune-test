@@ -175,20 +175,19 @@ grep -Fq 'filterFrozenApps(list);' "$DOCK" \
     || fail "All Apps frozen-package blacklist is not applied to both physical displays"
 grep -Fq 'addMissingApps(list);' "$DOCK" \
     || fail "All Apps injection no longer adds user applications"
-grep -Fq 'var syntheticStartByList = {};' "$DOCK" \
-    || fail "All Apps bind path has no per-list synthetic suffix cache"
-grep -Eq 'function mayContainSynthetic\(adapter, position(, metadata)?\) \{' "$DOCK" \
-    || fail "All Apps bind path cannot skip stock tiles"
-grep -Eq 'if \(!mayContainSynthetic\(adapter, position(, metadata)?\)\) return;' "$DOCK" \
-    || fail "stock All Apps tiles still pay the custom-item reflection cost"
-grep -Fq 'var adapterMetadataByIdentity = {};' "$DOCK" \
-    || fail "All Apps bind path does not cache adapter list metadata"
-grep -Fq 'clearAdapterMetadata();' "$DOCK" \
-    || fail "All Apps adapter metadata is not invalidated after list rebuild"
-grep -Fq 'tuneAllAppsRecyclerCache(holder);' "$DOCK" \
-    || fail "All Apps does not warm the bounded RecyclerView holder cache"
-grep -Fq 'recycler.setItemViewCacheSize(ALL_APPS_VIEW_CACHE_SIZE);' "$DOCK" \
-    || fail "All Apps holder cache size is not applied through RecyclerView"
+grep -Fq 'var nativeDynamicApps = false;' "$DOCK" \
+    || fail "All Apps does not detect the native dynamic AppBean renderer"
+grep -Fq "AppBean.\$init.overload('int', 'java.lang.String', 'java.lang.String');" "$DOCK" \
+    || fail "All Apps does not validate the native dynamic AppBean constructor"
+grep -Fq 'bean = AppBean.$new(0, JavaString.$new(label), pkg);' "$DOCK" \
+    || fail "All Apps does not create native dynamic entries"
+grep -Fq 'bean.setDynamicDrawable(icon);' "$DOCK" \
+    || fail "All Apps does not provide native application icons"
+grep -Fq 'if (!nativeDynamicApps) {' "$DOCK" \
+    || fail "legacy post-bind renderer is not isolated from the native path"
+if grep -Fq 'tuneAllAppsRecyclerCache' "$DOCK"; then
+    fail "All Apps still changes RecyclerView cache from the scrolling path"
+fi
 [ "$(grep -Fc 'pm.getInstalledApplications(0)' "$DOCK")" -eq 1 ] \
     || fail "installed app discovery must have one event-invalidated snapshot builder, not polling"
 grep -Fq 'var reloadData = Data.reload.overload();' "$DOCK" \
@@ -232,15 +231,15 @@ grep -Fq 'var rawScreenId = fieldValue(owner, "mScreenId");' "$DOCK" \
 if grep -Fq 'var screenId = Number(fieldValue(this, "mScreenId"));' "$DOCK"; then
     fail "AllAppAdapter has no mScreenId; missing fields must not silently route passenger clicks to display 0"
 fi
-grep -Fq 'var bean = AppBean.$new(template.icon, template.name, pkg);' "$DOCK" \
-    || fail "synthetic All Apps entries need valid OEM placeholder resources before stock bind"
+grep -Fq 'bean = AppBean.$new(template.icon, template.name, pkg);' "$DOCK" \
+    || fail "legacy All Apps fallback needs valid OEM placeholder resources"
 grep -Fq 'template = findAppTemplate(getAll.call(Data, 0));' "$DOCK" \
-    || fail "an empty passenger OEM list needs a safe main-list resource template fallback"
+    || fail "an empty legacy passenger list needs a safe main-list resource template fallback"
 if grep -Fq 'var bean = AppBean.$new(0, 0, pkg);' "$DOCK"; then
-    fail "zero All Apps resources crash the OEM adapter before custom icon/label replacement"
+    fail "zero-resource static AppBeans crash the OEM adapter"
 fi
 grep -Fq "'int', 'java.util.List'" "$DOCK" \
-    || fail "All Apps payload binds must re-apply third-party icons after theme/state updates"
+    || fail "legacy All Apps payload binds must retain their renderer fallback"
 grep -Fq 'com.qinggan.launcher.allapp.AllAppBarView' "$DOCK" \
     || fail "All Apps synthetic clicks must be intercepted by the OEM listener owner"
 grep -Fq 'allAppsAbi.adapter + '\''$AppViewHolder'\''' "$DOCK" \
