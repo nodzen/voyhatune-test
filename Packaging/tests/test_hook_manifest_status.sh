@@ -13,6 +13,7 @@ FULL_INSTALL="$ROOT/Packaging/installer/full/install.sh"
 FULL_INSTALL_BAT="$ROOT/Packaging/installer/full/install.bat"
 LIGHT_INSTALL="$ROOT/Packaging/installer/light/install.sh"
 LIGHT_INSTALL_BAT="$ROOT/Packaging/installer/light/install.bat"
+CANBUS_HELPER="$ROOT/Packaging/installer/common/canbus-owner.sh"
 
 fail() { echo "hook manifest/status test failed: $*" >&2; exit 1; }
 require() { grep -Fq -- "$2" "$1" || fail "$1: missing $2"; }
@@ -108,11 +109,18 @@ forbid "$FULL_INSTALL" 'pgrep -f'
 forbid "$FULL_INSTALL" 'pkill -'
 forbid "$FULL_INSTALL" 'signal_hook_runtime'
 
-# Full update safety: the process freeze is after the only possible verity reboot, before the first
-# hook-state mutation, and an abort can restart the old/new init service. The manifest stays last.
-[ "$(grep -Ec '^[[:space:]]*(if ! )?adb reboot' "$FULL_INSTALL")" -eq 2 ] \
-    || fail "full install.sh must have only verity and final reboots"
-full_sh_verity=$(grep -nE '^[[:space:]]*adb reboot$' "$FULL_INSTALL" | head -n1 | cut -d: -f1)
+# Full update safety: /system preparation is shared with Light and stays before the process freeze;
+# the only normal full-installer reboot left here is the final publish reboot. The helper has one
+# conditional verity reboot and one conditional VoyahHlCTRL-removal reboot.
+[ "$(grep -Ec '^[[:space:]]*(if ! )?adb reboot' "$FULL_INSTALL")" -eq 1 ] \
+    || fail "full install.sh must have only its final normal-install reboot"
+[ "$(grep -Ec '^[[:space:]]*(if ! )?adb reboot' "$CANBUS_HELPER")" -eq 2 ] \
+    || fail "CANBus helper must have only conditional verity and VoyahHlCTRL-removal reboots"
+require "$FULL_INSTALL" 'canbus_owner_preflight full'
+require "$FULL_INSTALL" 'canbus_prepare_writable_system'
+require "$CANBUS_HELPER" 'canbus_remove_hl_service() {'
+require "$CANBUS_HELPER" 'rm -rf /data/system/package_cache/*'
+full_sh_verity=$(line_first "$FULL_INSTALL" 'if ! canbus_prepare_writable_system; then')
 full_sh_barrier=$(line_first "$FULL_INSTALL" 'HOOK_UPDATE_BARRIER_ARMED=1')
 full_sh_mutation=$(line_first "$FULL_INSTALL" 'if ! adb shell settings put global "$APOLLO_SAFE_KEY" 0; then')
 [ "$full_sh_verity" -lt "$full_sh_barrier" ] && [ "$full_sh_barrier" -lt "$full_sh_mutation" ] \
@@ -182,12 +190,14 @@ full_bat_first_adb=$(line_first "$FULL_INSTALL_BAT" 'adb.exe root')
 [ "$full_bat_manifest_preflight" -lt "$full_bat_first_adb" ] \
     || fail "full install.bat manifest preflight must run before the first ADB call"
 
-# Full -> Light safety: stop after remount/reboot, refuse the owned legacy init.logcat path, disable
+# Full -> Light safety: stop after the shared remount/reboot, refuse the owned legacy init.logcat path, disable
 # the dedicated RC before deleting all project scripts/manifest/status, and never remove an unknown
 # generic injector binary. Phase 2 intentionally has no restart path.
-[ "$(grep -Ec '^[[:space:]]*(if ! )?adb reboot' "$LIGHT_INSTALL")" -eq 2 ] \
-    || fail "light install.sh must have only verity and final reboots"
-light_sh_verity=$(grep -nE '^[[:space:]]*adb reboot$' "$LIGHT_INSTALL" | head -n1 | cut -d: -f1)
+[ "$(grep -Ec '^[[:space:]]*(if ! )?adb reboot' "$LIGHT_INSTALL")" -eq 1 ] \
+    || fail "light install.sh must have only its final normal-install reboot"
+require "$LIGHT_INSTALL" 'canbus_owner_preflight light'
+require "$LIGHT_INSTALL" 'canbus_prepare_writable_system'
+light_sh_verity=$(line_first "$LIGHT_INSTALL" 'if ! canbus_prepare_writable_system; then')
 light_sh_barrier=$(line_first "$LIGHT_INSTALL" 'LIGHT_HOOK_BARRIER_PHASE=1')
 light_sh_mutation=$(line_first "$LIGHT_INSTALL" 'if ! adb shell settings put global "$APOLLO_SAFE_KEY" 0; then')
 light_sh_teardown=$(line_first "$LIGHT_INSTALL" 'if ! remove_full_hook_runtime_for_light; then')

@@ -12,7 +12,7 @@ exit /b %LIGHT_INSTALL_RESULT%
 
 :install_main
 cd /d "%~dp0" || exit /b 1
-for %%F in (adb.exe AdbWinApi.dll AdbWinUsbApi.dll native.apk restore_mode.apk privapp-permissions-ru.big.town.anative.xml dns-overlay.bat dns-overlay-device.sh framework-res__config_ethernet_interfaces_yandexdns.apk install-yandex-dns.bat) do if not exist "%%F" (
+for %%F in (adb.exe AdbWinApi.dll AdbWinUsbApi.dll native.apk restore_mode.apk privapp-permissions-ru.big.town.anative.xml dns-overlay.bat dns-overlay-device.sh canbus-owner.bat framework-res__config_ethernet_interfaces_yandexdns.apk install-yandex-dns.bat) do if not exist "%%F" (
     echo !!! Required file %%F is missing. The device was not changed.
     exit /b 1
 )
@@ -20,32 +20,8 @@ for %%F in (adb.exe AdbWinApi.dll AdbWinUsbApi.dll native.apk restore_mode.apk p
 adb.exe root
 adb.exe wait-for-device
 adb.exe root
-
-echo === Preflight owner check for com.qinggan.permission.WRITE_CANBUS ===
-adb.exe shell dumpsys package permissions >nul 2>nul
-if errorlevel 1 (
-    echo !!! PackageManager permissions are unavailable. Installation stopped before writing to /system.
-    exit /b 1
-)
-set CANBUS_PERMISSION_PRESENT=0
-adb.exe shell "dumpsys package permissions | grep -qF 'Permission [com.qinggan.permission.WRITE_CANBUS]'" >nul 2>nul
-if not errorlevel 1 set CANBUS_PERMISSION_PRESENT=1
-set CANBUS_PERMISSION_OWNER=
-if "%CANBUS_PERMISSION_PRESENT%"=="1" for /f "tokens=2 delims==" %%i in ('adb.exe shell "dumpsys package permissions ^| grep -A 32 -F 'Permission [com.qinggan.permission.WRITE_CANBUS]' ^| grep -F 'sourcePackage='" 2^>nul') do if not defined CANBUS_PERMISSION_OWNER set CANBUS_PERMISSION_OWNER=%%i
-if "%CANBUS_PERMISSION_PRESENT%"=="0" goto :canbus_permission_ok
-if "%CANBUS_PERMISSION_OWNER%"=="ru.big.town.anative" goto :canbus_permission_ok
-if "%CANBUS_PERMISSION_OWNER%"=="" (
-    echo   WARNING: this firmware does not report the owner of com.qinggan.permission.WRITE_CANBUS.
-    echo   Continuing. Android PackageManager will still reject a real duplicate permission.
-    set CANBUS_PERMISSION_PRESENT=2
-    goto :canbus_permission_ok
-)
-echo !!! com.qinggan.permission.WRITE_CANBUS already belongs to %CANBUS_PERMISSION_OWNER%.
-echo     Remove the incompatible package and repeat light install. /system is still unchanged.
-exit /b 1
-:canbus_permission_ok
-if "%CANBUS_PERMISSION_PRESENT%"=="0" echo   The permission is not declared yet. Native will create it.
-if "%CANBUS_PERMISSION_PRESENT%"=="1" echo   The permission belongs to ru.big.town.anative. This update is compatible.
+call canbus-owner.bat light
+if errorlevel 1 exit /b 1
 
 echo === Preparing writable /system ^(verity, overlay^) ===
 adb.exe disable-verity

@@ -440,6 +440,10 @@ public class AdvanceActivity extends AppCompatActivity {
         textRamStatus      = findViewById(R.id.textRamStatus);
         textCpuStatus      = findViewById(R.id.textCpuStatus);
         textHookStatus     = findViewById(R.id.textHookStatus);
+        TextView versionSignature = findViewById(R.id.textVersionSignature);
+        if (versionSignature != null) {
+            versionSignature.setText(getString(R.string.version_signature, BuildConfig.VERSION_NAME));
+        }
         navMainScreen.setOnClickListener(v -> setSection(0));
         navDriveModes.setOnClickListener(v -> setSection(1));
         navSplitScreen.setOnClickListener(v -> setSection(2));

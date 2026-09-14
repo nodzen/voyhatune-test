@@ -12,6 +12,14 @@ fi
     echo "!!! Не удалось загрузить ./dns-overlay.sh — установка прервана."
     exit 1
 }
+if [ ! -f ./canbus-owner.sh ]; then
+    echo "!!! Не найден ./canbus-owner.sh — установка прервана до изменения устройства."
+    exit 1
+fi
+. ./canbus-owner.sh || {
+    echo "!!! Не удалось загрузить ./canbus-owner.sh — установка прервана."
+    exit 1
+}
 for ydns_required in ydns_prepare_helper ydns_query_state choose_yandex_dns install_yandex_dns disable_yandex_dns configure_yandex_dns; do
     if ! command -v "$ydns_required" >/dev/null 2>&1; then
         echo "!!! dns-overlay.sh не содержит $ydns_required — установка прервана."
@@ -300,50 +308,11 @@ ensure_native_user_ready() {
     return 1
 }
 
-# Оба флейвора Native владеют signature-разрешением прямой записи в CanBus. Чужой первый владелец
-# сделал бы установленный APK несовместимым, поэтому конфликт проверяется до изменения /system.
-echo "=== Preflight владельца com.qinggan.permission.WRITE_CANBUS ==="
-CANBUS_PERMISSION_DUMP=$(adb shell dumpsys package permissions 2>/dev/null)
-if [ $? -ne 0 ]; then
-    echo "!!! PackageManager permissions недоступны — установка прервана до записи в /system."
+# Native declares the signature permission used by its fail-closed CAN writer. The shared preflight
+# permits our own update, removes only the known VoyahHlCTRL conflict, and names every other owner.
+if ! canbus_owner_preflight light; then
     exit 1
 fi
-case "$CANBUS_PERMISSION_DUMP" in
-    *"Permission [com.qinggan.permission.WRITE_CANBUS]"*)
-        CANBUS_PERMISSION_OWNER=$(printf '%s\n' "$CANBUS_PERMISSION_DUMP" | awk '
-            /Permission \[com\.qinggan\.permission\.WRITE_CANBUS\]/ { in_block=1; next }
-            in_block && /Permission \[/ { exit }
-            in_block && /sourcePackage=/ {
-                sub(/^.*sourcePackage=/, ""); gsub(/[[:space:]]/, ""); print; exit
-            }')
-        if [ "$CANBUS_PERMISSION_OWNER" != "ru.big.town.anative" ]; then
-            if [ -n "$CANBUS_PERMISSION_OWNER" ]; then
-                echo "!!! com.qinggan.permission.WRITE_CANBUS уже принадлежит $CANBUS_PERMISSION_OWNER."
-            else
-                echo "!!! Владелец com.qinggan.permission.WRITE_CANBUS не определён однозначно."
-            fi
-            echo "    Удалите несовместимый пакет и повторите light install; /system ещё не изменялся."
-            exit 1
-        fi
-        echo "  Permission уже принадлежит ru.big.town.anative — совместимое обновление."
-        ;;
-    *)
-        echo "  Permission ещё не объявлен — его создаст Native."
-        ;;
-esac
-
-# --- Гарантируем ЗАПИСЫВАЕМЫЙ /system --------------------------------------------------------
-# Light тоже пишет в /system (priv-app + whitelist привилегий), поэтому подготовка нужна ровно та же,
-# что и в full. Без неё на стоковой/после-OTA голове dm-verity держит /system read-only → push даёт
-# "I/O error" и установка падает. disable-verity вступает в силу ТОЛЬКО после РЕБУТА. Делаем
-# ИДЕМПОТЕНТНО: если /system уже записываем (готовая голова) — ребута НЕ будет; иначе снимаем verity,
-# ОДИН раз перезагружаемся и продолжаем. adb remount = OverlayFS поверх read-only/динамических
-# разделов (устойчивее сырого mount -o rw,remount). При невозможности — прерываемся, НЕ трогая /system.
-system_is_writable() {
-    adb remount >/dev/null 2>&1
-    adb shell 'mount -o rw,remount /system 2>/dev/null; mount -o rw,remount / 2>/dev/null' >/dev/null 2>&1
-    [ "$(adb shell 'touch /system/.ovw_rwtest 2>/dev/null && rm -f /system/.ovw_rwtest && echo RW || echo RO' | tr -d '\r')" = "RW" ]
-}
 
 # Push into an inactive path on the same /system filesystem, publish with rename only after
 # ownership/mode/SELinux checks pass, and leave no stage file on an aborted Light transition.
@@ -364,28 +333,9 @@ install_required_system_file() {
     fi
 }
 
-echo "=== Готовим /system к записи (verity → overlay) ==="
-adb disable-verity 2>&1 | sed 's/^/  /'
-if ! system_is_writable; then
-    echo "  /system ещё read-only → перезагрузка ОДИН раз (применяем disable-verity)..."
-    adb reboot
-    adb wait-for-device
-    i=0
-    while [ $i -lt 60 ]; do
-        [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && break
-        sleep 5; i=$((i + 1))
-    done
-    sleep 3
-    adb root >/dev/null 2>&1; adb wait-for-device; adb root >/dev/null 2>&1
-fi
-if ! system_is_writable; then
-    echo "!!! /system ОСТАЁТСЯ read-only — установка прервана (в /system ничего не тронуто)."
-    echo "    Причины: заблокирован загрузчик (disable-verity не срабатывает) / прошивка с EROFS"
-    echo "    (несжимаемая read-only ФС) / verity не снимается на этой сборке."
-    echo "    Проверьте вручную: adb disable-verity ; adb reboot ; adb root ; adb remount ; adb shell mount | grep system"
+if ! canbus_prepare_writable_system; then
     exit 1
 fi
-echo "  /system записываем — продолжаем."
 
 BACKUP_DIR="backup"
 mkdir -p "$BACKUP_DIR"
