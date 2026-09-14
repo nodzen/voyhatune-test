@@ -28,6 +28,7 @@ import java.io.FileOutputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -398,8 +399,10 @@ public class NowPlayingService extends Service {
 
                     @Override public void onMetadataChanged(MediaMetadata metadata) {
                         if (!isActiveWatcher(generation, watcherEpoch)) return;
-                        // Metadata cannot change controller priority. Non-current metadata is noise.
-                        if (sameController(watchedController, current)) {
+                        // One player can expose separate command and metadata sessions. A metadata
+                        // callback from either session of the selected package must refresh the
+                        // single snapshot shown by the native cards.
+                        if (samePackage(watchedController, current)) {
                             offerMediaRefresh(MediaRefreshDelivery.Work.PUBLISH, "metadata");
                         }
                     }
@@ -565,19 +568,117 @@ public class NowPlayingService extends Service {
         catch (Exception e) { return null; }
     }
 
-    private boolean sameController(MediaController a, MediaController b) {
+    private static boolean sameController(MediaController a, MediaController b) {
         if (a == null || b == null) return a == b;
         try { return a.getSessionToken().equals(b.getSessionToken()); } catch (Exception e) { return false; }
     }
 
+    private static boolean samePackage(MediaController a, MediaController b) {
+        if (a == null || b == null) return false;
+        try { return nz(a.getPackageName()).equals(nz(b.getPackageName())); }
+        catch (Exception e) { return false; }
+    }
+
     private static MediaController findPackage(List<MediaController> controllers, String pkg) {
         if (controllers == null || pkg == null || pkg.isEmpty()) return null;
+        MediaController best = null;
+        int bestScore = Integer.MIN_VALUE;
         for (MediaController controller : controllers) {
             try {
-                if (pkg.equals(controller.getPackageName())) return controller;
+                if (!pkg.equals(controller.getPackageName())) continue;
+                int score = controllerSelectionScore(controller);
+                if (best == null || score > bestScore) {
+                    best = controller;
+                    bestScore = score;
+                }
             } catch (Exception ignored) {}
         }
-        return null;
+        return best;
+    }
+
+    /**
+     * A package may publish more than one active MediaSession: a command-only transport session
+     * and a richer metadata session are a common Spotify pattern. Keep controls on the session
+     * most likely to own playback, while metadata is resolved independently below.
+     */
+    private static int controllerSelectionScore(MediaController controller) {
+        PlaybackState state = safePlaybackState(controller);
+        int score;
+        int playbackState = state == null ? PlaybackState.STATE_NONE : state.getState();
+        switch (playbackState) {
+            case PlaybackState.STATE_PLAYING:
+            case PlaybackState.STATE_BUFFERING:
+            case PlaybackState.STATE_CONNECTING:
+                score = 10_000;
+                break;
+            case PlaybackState.STATE_PAUSED:
+                score = 6_000;
+                break;
+            case PlaybackState.STATE_STOPPED:
+                score = 4_000;
+                break;
+            default:
+                score = 0;
+                break;
+        }
+        if (state != null && state.getActions() != 0L) score += 100;
+        return score + metadataScore(safeMetadata(controller));
+    }
+
+    /** Returns the richest metadata session for one app, preferring the command session on ties. */
+    private static MediaController metadataControllerForPackage(List<MediaController> controllers,
+                                                                 String pkg,
+                                                                 MediaController commandController) {
+        if (controllers == null || pkg == null || pkg.isEmpty()) return commandController;
+        MediaController best = null;
+        int bestScore = 0;
+        for (MediaController controller : controllers) {
+            try {
+                if (!pkg.equals(controller.getPackageName())) continue;
+                int score = metadataScore(safeMetadata(controller));
+                if (sameController(controller, commandController)) score++;
+                if (score > bestScore) {
+                    best = controller;
+                    bestScore = score;
+                }
+            } catch (Exception ignored) {}
+        }
+        return best == null ? commandController : best;
+    }
+
+    private static MediaMetadata safeMetadata(MediaController controller) {
+        try { return controller == null ? null : controller.getMetadata(); }
+        catch (Exception e) { return null; }
+    }
+
+    private static String metadataTitle(MediaMetadata metadata) {
+        return metadata == null ? "" : firstNonEmpty(
+                metadata.getString(MediaMetadata.METADATA_KEY_TITLE),
+                metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE));
+    }
+
+    private static String metadataArtist(MediaMetadata metadata) {
+        return metadata == null ? "" : firstNonEmpty(
+                metadata.getString(MediaMetadata.METADATA_KEY_ARTIST),
+                metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST),
+                metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE));
+    }
+
+    private static int metadataScore(MediaMetadata metadata) {
+        if (metadata == null) return 0;
+        int score = 0;
+        if (!metadataTitle(metadata).isEmpty()) score += 100;
+        if (!metadataArtist(metadata).isEmpty()) score += 30;
+        if (!nz(metadata.getString(MediaMetadata.METADATA_KEY_ALBUM)).isEmpty()) score += 10;
+        if (metadata.getLong(MediaMetadata.METADATA_KEY_DURATION) > 0L) score += 5;
+        if (metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART) != null
+                || metadata.getBitmap(MediaMetadata.METADATA_KEY_ART) != null
+                || metadata.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON) != null) score += 20;
+        return score;
+    }
+
+    private static boolean usableMediaController(MediaController controller) {
+        return safeMetadata(controller) != null || safePlaybackState(controller) != null;
     }
 
     /** Снять подписки со всех отслеживаемых сессий (следим за всеми, а не только за выбранной). */
@@ -595,25 +696,37 @@ public class NowPlayingService extends Service {
         List<SourceSnapshot> next = new ArrayList<>();
         List<MediaController> controllers = activeControllers;
         if (controllers != null) {
+            // One row per application. A player can legitimately own multiple sessions, but a
+            // duplicate source row has no useful meaning to the driver and used to make their
+            // selection depend on framework list order.
+            Map<String, MediaController> byPackage = new LinkedHashMap<>();
             for (MediaController controller : controllers) {
                 try {
                     String pkg = nz(controller.getPackageName());
-                    if (pkg.isEmpty()) continue;
-                    MediaMetadata md = controller.getMetadata();
-                    PlaybackState ps = controller.getPlaybackState();
+                    if (pkg.isEmpty() || !usableMediaController(controller)) continue;
+                    MediaController previous = byPackage.get(pkg);
+                    if (previous == null
+                            || controllerSelectionScore(controller) > controllerSelectionScore(previous)) {
+                        byPackage.put(pkg, controller);
+                    }
+                } catch (Exception ignored) {}
+            }
+            for (Map.Entry<String, MediaController> entry : byPackage.entrySet()) {
+                try {
+                    String pkg = entry.getKey();
+                    MediaController controller = entry.getValue();
+                    MediaController metadataController = metadataControllerForPackage(
+                            controllers, pkg, controller);
+                    MediaMetadata md = safeMetadata(metadataController);
+                    PlaybackState ps = safePlaybackState(controller);
                     // A controller without either metadata or state is an implementation detail,
                     // not a usable music source. Paused sessions with metadata remain visible.
                     if (md == null && ps == null) continue;
-                    String title = md == null ? "" : firstNonEmpty(
-                            md.getString(MediaMetadata.METADATA_KEY_TITLE),
-                            md.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE));
-                    String artist = md == null ? "" : firstNonEmpty(
-                            md.getString(MediaMetadata.METADATA_KEY_ARTIST),
-                            md.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST),
-                            md.getString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE));
+                    String title = metadataTitle(md);
+                    String artist = metadataArtist(md);
                     int state = ps == null ? PlaybackState.STATE_NONE : ps.getState();
                     next.add(new SourceSnapshot(pkg, appLabel(pkg), title, artist, state,
-                            sameController(controller, current)));
+                            samePackage(controller, current)));
                 } catch (Exception ignored) {}
             }
         }
@@ -682,13 +795,14 @@ public class NowPlayingService extends Service {
             if (current != null) {
                 pkg = nz(current.getPackageName());
                 appLabel = appLabel(pkg);
-                MediaMetadata md = current.getMetadata();
+                // Do not assume the transport controller is also the metadata controller. Spotify
+                // and several Android Auto bridges split those responsibilities across tokens.
+                MediaController metadataController = metadataControllerForPackage(
+                        activeControllers, pkg, current);
+                MediaMetadata md = safeMetadata(metadataController);
                 if (md != null) {
-                    title  = firstNonEmpty(md.getString(MediaMetadata.METADATA_KEY_TITLE),
-                                           md.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE));
-                    artist = firstNonEmpty(md.getString(MediaMetadata.METADATA_KEY_ARTIST),
-                                           md.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST),
-                                           md.getString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE));
+                    title  = metadataTitle(md);
+                    artist = metadataArtist(md);
                     album  = nz(md.getString(MediaMetadata.METADATA_KEY_ALBUM));
                     duration = md.getLong(MediaMetadata.METADATA_KEY_DURATION);
                     hasArt = writeArt(md);

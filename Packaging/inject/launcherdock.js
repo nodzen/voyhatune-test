@@ -1845,6 +1845,7 @@ Java.perform(function () {
             var StringMedia = Java.use("java.lang.String");
             var NativeMediaTag = Java.retain(Java.use("java.lang.Object").$new());
             var ArrayListMedia = Java.use("java.util.ArrayList");
+            var IdentityHashMapMedia = Java.use("java.util.IdentityHashMap");
             var BundleMedia = Java.use("android.os.Bundle");
             var mediaWidgetHooks = {};
             var widgetConfigCache = {};
@@ -1860,7 +1861,10 @@ Java.perform(function () {
             var selectedMediaPackage = "";
             var bridgeSources = [];
             var bridgeSourcesKey = "";
-            var bridgeBeanSources = Object.create(null);
+            // SrcMediaBean.hashCode() is value-based (the OEM MediaResEnum), so all of our
+            // WE_CAR rows can have the same hash. Identity mapping keeps app rows distinct and
+            // never mistakes the stock DAB/WeChat row for one inserted by VoyahTune.
+            var bridgeBeanPackages = IdentityHashMapMedia.$new();
             var enabled = true;
             var latestSnapshot = null;
             var nativeInfo = null;
@@ -2317,21 +2321,33 @@ Java.perform(function () {
             }
             function beanKey(bean) {
                 if (bean === null || bean === undefined) return "";
-                try { return "" + bean.hashCode(); } catch (e) { return ""; }
+                try {
+                    var pkg = bridgeBeanPackages.get(bean);
+                    return pkg === null || pkg === undefined ? "" : mediaString(pkg);
+                } catch (e) { return ""; }
+            }
+            function isBridgeBean(bean) {
+                if (bean === null || bean === undefined) return false;
+                try { return bridgeBeanPackages.containsKey(bean); }
+                catch (e) { return false; }
+            }
+            function clearBridgeBeans() {
+                try { bridgeBeanPackages.clear(); } catch (e) {}
             }
             function sourceForBean(bean) {
-                var key = beanKey(bean);
-                return key && Object.prototype.hasOwnProperty.call(bridgeBeanSources, key)
-                        ? bridgeBeanSources[key] : null;
+                var pkg = beanKey(bean);
+                if (!pkg) return null;
+                for (var i = 0; i < bridgeSources.length; i++) {
+                    if (bridgeSources[i].pkg === pkg) return bridgeSources[i];
+                }
+                return null;
             }
             function makeBridgeBean(source) {
                 try {
                     var mediaRes = freshMediaResEnum("WE_CAR");
                     if (mediaRes === null) return null;
                     var bean = SrcMediaBean.$new(mediaRes);
-                    var key = beanKey(bean);
-                    if (!key) return null;
-                    bridgeBeanSources[key] = source;
+                    bridgeBeanPackages.put(bean, StringMedia.$new(source.pkg));
                     return bean;
                 } catch (e) {
                     Log.w(TAG, "[media] source bean creation failed: " + e);
@@ -2353,13 +2369,11 @@ Java.perform(function () {
                     var stock = ArrayListMedia.$new();
                     for (var i = 0; i < list.size(); i++) {
                         var bean = list.get(i);
-                        var key = beanKey(bean);
-                        if (sourceForBean(bean) === null) {
+                        if (!isBridgeBean(bean)) {
                             stock.add(bean);
-                        } else if (key) {
-                            delete bridgeBeanSources[key];
                         }
                     }
+                    clearBridgeBeans();
                     list.clear();
                     list.addAll(stock);
                     appendBridgeBeans(list);
@@ -2393,17 +2407,14 @@ Java.perform(function () {
                         if (list === null) return fillData.call(this, list);
                         // The OEM adapter owns its stock rows. We append one existing-WECAR row
                         // per actual app MediaSession and keep an object-identity map for clicks.
-                        bridgeBeanSources = Object.create(null);
                         var copy = ArrayListMedia.$new();
-                        for (var i = 0; i < list.size(); i++) copy.add(list.get(i));
+                        for (var i = 0; i < list.size(); i++) {
+                            var bean = list.get(i);
+                            if (!isBridgeBean(bean)) copy.add(bean);
+                        }
+                        clearBridgeBeans();
                         appendBridgeBeans(copy);
                         return fillData.call(this, copy);
-                    };
-                    var getMediaResEnum = Adapter.getMediaResEnum.overload();
-                    getMediaResEnum.implementation = function () {
-                        var mediaRes = freshMediaResEnum("WE_CAR");
-                        if (currentWecar() && mediaRes !== null) return mediaRes;
-                        return getMediaResEnum.call(this);
                     };
                     var bindView = Holder.bindView.overload("int");
                     bindView.implementation = function (position) {
