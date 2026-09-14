@@ -136,7 +136,6 @@ public class LightSensorService extends Service {
     private static final String CAR_SIGNAL_PACKAGE = "com.qinggan.carsignal.service";
 
     // CanBus signals routed through the single process-wide callback.
-    private static final int    GEAR_PARKING             = 0;
     private static final int    GEAR_DRIVE               = 3;
     // BCM_RSM_lightSWReason (value 1072): 0 Day, 1 Others, 2 Dark, 3 Tunnel, 4 Darkstart
     private static final int    RSM_LIGHT_SW_REASON      = 1072;
@@ -1141,8 +1140,7 @@ public class LightSensorService extends Service {
     private void applyParkingHeadlightsSetting(boolean enabled) {
         if (destroyed) return;
         headlightsOffInParking = enabled;
-        if (enabled && lastGear == GEAR_PARKING
-                && (!everSent || headlightsOn)) {
+        if (ParkingHeadlightPolicy.shouldTurnOff(enabled, lastGear)) {
             commit(false, "gear=P; parking headlight switch");
         }
         Log.i(TAG, "headlightsOffInParking=" + enabled + "; gear=" + lastGear);
@@ -1376,7 +1374,8 @@ public class LightSensorService extends Service {
     }
 
     private boolean commit(boolean targetOn, String reason) {
-        if (targetOn && headlightsOffInParking && lastGear == GEAR_PARKING) {
+        if (targetOn && ParkingHeadlightPolicy.shouldTurnOff(
+                headlightsOffInParking, lastGear)) {
             Log.i(TAG, "commit(" + reason + ") suppressed: parking headlight switch keeps light off");
             return false;
         }
@@ -1447,11 +1446,13 @@ public class LightSensorService extends Service {
      */
     private void onGear(int gearVal) {
         if (gearVal < 0 || gearVal == lastGear) return;
-        boolean toParking = (gearVal == GEAR_PARKING);
         boolean toDrive = (gearVal == GEAR_DRIVE);
         lastGear = gearVal;
         timerHandler.removeCallbacks(driveFallbackRunnable);
-        if (toParking && headlightsOffInParking && (!everSent || headlightsOn)) {
+        // This is a transition-only callback, so every real shift into P gets one explicit OEM
+        // OUT_LAMP_OFF command. Do not derive the need for it from headlightsOn/everSent: those
+        // are our old automatic target, not the actual BCM/manual state after a later override.
+        if (ParkingHeadlightPolicy.shouldTurnOff(headlightsOffInParking, gearVal)) {
             commit(false, "gear=P; parking headlight switch");
             return;
         }
