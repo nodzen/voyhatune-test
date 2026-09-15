@@ -22,10 +22,10 @@ for hook in $HOOKS; do
     ENTRIES="$ENTRIES $source"
 done
 
-# No bundling is needed yet: every agent is a self-contained Frida entry point. Keeping this
-# single compiler boundary makes later source modules possible without changing installers.
+# Bundle shared pure modules into each self-contained Frida entry point. Installers still receive
+# the same flat hook filenames and do not need a module loader on the head unit.
 # shellcheck disable=SC2086 # Entry paths are repository-controlled and contain no spaces.
-npx --yes esbuild@0.25.0 $ENTRIES --minify --format=iife --target=es2018 \
+npx --yes esbuild@0.25.0 $ENTRIES --bundle --minify --format=iife --target=es2018 \
     --legal-comments=none --log-level=warning --outdir="$OUTPUT"
 for hook in $HOOKS; do
     node --check "$OUTPUT/$hook"

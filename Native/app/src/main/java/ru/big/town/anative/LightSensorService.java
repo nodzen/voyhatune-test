@@ -1397,7 +1397,7 @@ public class LightSensorService extends Service {
                         // recording a send which never happened.
                         return false;
                     }
-                    return MainActivity.setHeadlights(this, targetOn);
+                    return VehicleCommandFacade.setHeadlights(this, targetOn);
                 },
                 result -> {
                     if (result != ApplyEngine.WakeActionResult.SUCCESS) {

@@ -63,6 +63,7 @@ public class NowPlayingService extends Service {
     private static final String CHANNEL_ID = "now_playing_channel";
     private static final String NATIVE_PREFS = "NativePrefs";
     private static final String MANUAL_SOURCE_KEY = "voyahtune_media_source_package";
+    private static final String OEM_SOURCE_SELECTED_KEY = "voyahtune_oem_media_source_selected";
 
     public static final String ACTION_NOW_PLAYING         = "ru.big.town.anative.NOW_PLAYING";
     public static final String ACTION_NOW_PLAYING_SOURCES = "ru.big.town.anative.NOW_PLAYING_SOURCES";
@@ -222,6 +223,9 @@ public class NowPlayingService extends Service {
     // MediaSession disappears, so a paused second player is not immediately replaced by another
     // active session on the next callback.
     private String manuallySelectedPackage = "";
+    // A stock BT/DAB/USB click is an explicit source choice too. Keep third-party sessions
+    // unselected until their source row is chosen or one genuinely starts a new playback edge.
+    private volatile boolean oemSourceSelected;
     // PackageManager lookups are Binder calls and metadata/playback callbacks arrive often. Labels
     // only change on package update, so a small service-lifetime cache removes this hot-path work.
     private final Map<String, String> appLabelCache = new HashMap<>();
@@ -242,8 +246,11 @@ public class NowPlayingService extends Service {
     public void onCreate() {
         super.onCreate();
         activeService = this;
-        manuallySelectedPackage = getSharedPreferences(NATIVE_PREFS, MODE_PRIVATE)
-                .getString(MANUAL_SOURCE_KEY, "");
+        android.content.SharedPreferences sourcePrefs =
+                getSharedPreferences(NATIVE_PREFS, MODE_PRIVATE);
+        manuallySelectedPackage = sourcePrefs.getString(MANUAL_SOURCE_KEY, "");
+        oemSourceSelected = manuallySelectedPackage.isEmpty()
+                && sourcePrefs.getBoolean(OEM_SOURCE_SELECTED_KEY, false);
         // Сначала fail-closed сбрасываем legacy-маршрут. Даже если foreground-уведомление не
         // поднимется, старое значение "dispatch" не должно остаться после неудачного запуска.
         synchronized (INSTANCE_CALLBACK_LOCK) {
@@ -411,7 +418,8 @@ public class NowPlayingService extends Service {
                         boolean active = MediaControlRouter.isActiveState(state);
                         PlaybackActivityTracker.Change change = activity.update(active);
                         if (change == PlaybackActivityTracker.Change.ENTERED_ACTIVE) {
-                            notePlayingIfActive(watchedToken, generation, watcherEpoch);
+                            notePlayingIfActive(watchedController, watchedToken,
+                                    generation, watcherEpoch);
                         }
                         if (!isActiveWatcher(generation, watcherEpoch)) return;
                         if (change != PlaybackActivityTracker.Change.SAME) {
@@ -442,7 +450,7 @@ public class NowPlayingService extends Service {
             manuallySelectedPackage = "";
             getSharedPreferences(NATIVE_PREFS, MODE_PRIVATE).edit()
                     .remove(MANUAL_SOURCE_KEY).apply();
-            selected = MediaControlRouter.selectController(controllers, instanceGeneration);
+            selected = selectAutomaticController(controllers);
         }
         if (!isActiveInstance()) return;
         current = selected;
@@ -469,7 +477,7 @@ public class NowPlayingService extends Service {
             manuallySelectedPackage = "";
             getSharedPreferences(NATIVE_PREFS, MODE_PRIVATE).edit()
                     .remove(MANUAL_SOURCE_KEY).apply();
-            pick = MediaControlRouter.selectController(controllers, instanceGeneration);
+            pick = selectAutomaticController(controllers);
         }
         if (!isActiveInstance()) return;
         if (!sameController(pick, current)) {
@@ -482,12 +490,45 @@ public class NowPlayingService extends Service {
         publish(reason);
     }
 
-    private void notePlayingIfActive(MediaSession.Token token, long generation,
-                                     long watcherEpoch) {
+    private void notePlayingIfActive(MediaController controller, MediaSession.Token token,
+                                     long generation, long watcherEpoch) {
         synchronized (INSTANCE_CALLBACK_LOCK) {
             if (!isActiveWatcher(generation, watcherEpoch)) return;
             MediaControlRouter.notePlaying(token, generation);
         }
+        String pkg = controller == null ? "" : nz(controller.getPackageName());
+        if (oemSourceSelected && !pkg.isEmpty() && !isOemMediaPackage(pkg)
+                && isActiveWatcher(generation, watcherEpoch)) {
+            // This is an inactive→active edge, not the stale PLAYING state which may survive an
+            // OEM source switch. It is therefore safe to return to automatic third-party routing.
+            oemSourceSelected = false;
+            getSharedPreferences(NATIVE_PREFS, MODE_PRIVATE).edit()
+                    .remove(OEM_SOURCE_SELECTED_KEY).apply();
+            Log.i(TAG, "new third-party playback released OEM source selection: " + pkg);
+        }
+    }
+
+    private MediaController selectAutomaticController(List<MediaController> controllers) {
+        return oemSourceSelected
+                ? findBestOemController(controllers)
+                : MediaControlRouter.selectController(controllers, instanceGeneration);
+    }
+
+    private static MediaController findBestOemController(List<MediaController> controllers) {
+        if (controllers == null) return null;
+        MediaController best = null;
+        int bestScore = Integer.MIN_VALUE;
+        for (MediaController controller : controllers) {
+            try {
+                if (!isOemMediaPackage(controller.getPackageName())) continue;
+                int score = controllerSelectionScore(controller);
+                if (best == null || score > bestScore) {
+                    best = controller;
+                    bestScore = score;
+                }
+            } catch (Exception ignored) {}
+        }
+        return best;
     }
 
     private void detachAll() {
@@ -772,7 +813,9 @@ public class NowPlayingService extends Service {
             }
             service.manuallySelectedPackage = requested;
             service.getSharedPreferences(NATIVE_PREFS, MODE_PRIVATE).edit()
-                    .putString(MANUAL_SOURCE_KEY, requested).apply();
+                    .putString(MANUAL_SOURCE_KEY, requested)
+                    .remove(OEM_SOURCE_SELECTED_KEY).apply();
+            service.oemSourceSelected = false;
             service.current = selected;
             // Keep the OEM-native third-party alias and steering-wheel/provider commands on the
             // exact session the user selected. Without this, an active Bluetooth session can win
@@ -781,6 +824,31 @@ public class NowPlayingService extends Service {
             service.publishMediaRoute();
             service.publishSources("source-selected");
             service.publish("source-selected");
+        });
+    }
+
+    /** Returns source arbitration to live MediaSession priority after an OEM BT/DAB/USB click. */
+    static boolean clearSourceSelection() {
+        NowPlayingService service = activeService;
+        if (service == null) return false;
+        return service.dispatchWorker("clear-source", () -> {
+            service.manuallySelectedPackage = "";
+            service.oemSourceSelected = true;
+            service.getSharedPreferences(NATIVE_PREFS, MODE_PRIVATE).edit()
+                    .remove(MANUAL_SOURCE_KEY)
+                    .putBoolean(OEM_SOURCE_SELECTED_KEY, true).apply();
+            MediaControlRouter.releaseSourcePin();
+            // Do not immediately arbitrate over the pre-switch session list: OEM source changes
+            // are asynchronous and Spotify can still report PLAYING for that frame. Publish an
+            // unselected bridge now; subsequent OEM session callbacks can fill BT metadata.
+            List<MediaController> controllers = service.safeSessions();
+            service.activeControllers = controllers == null
+                    ? Collections.emptyList() : new ArrayList<>(controllers);
+            service.current = findBestOemController(controllers);
+            service.publishMediaRoute();
+            service.publishSources("source-cleared");
+            service.publish("source-cleared");
+            Log.i(TAG, "manual MediaSession source pin cleared for OEM source selection");
         });
     }
 

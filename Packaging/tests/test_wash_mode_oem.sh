@@ -7,8 +7,8 @@ POLICY="$REPO_ROOT/Native/app/src/main/java/ru/big/town/anative/WashModePolicy.j
 CONTROLLER="$REPO_ROOT/Native/app/src/main/java/ru/big/town/anative/WashModeController.java"
 LEASE="$REPO_ROOT/Native/app/src/main/java/ru/big/town/anative/WashModeRequestLease.java"
 SET_MODES="$REPO_ROOT/Native/app/src/main/java/ru/big/town/anative/SetModesService.java"
-NATIVE_MAIN="$REPO_ROOT/Native/app/src/main/java/ru/big/town/anative/MainActivity.java"
-RESTORE_MAIN="$REPO_ROOT/RestoreMode/app/src/main/java/ru/big/town/restoremode/MainActivity.java"
+NATIVE_FACADE="$REPO_ROOT/Native/app/src/main/java/ru/big/town/anative/VehicleCommandFacade.java"
+QUICK_ACTIONS="$REPO_ROOT/RestoreMode/app/src/main/java/ru/big/town/restoremode/QuickActionsController.java"
 STRINGS="$REPO_ROOT/RestoreMode/app/src/main/res/values/strings.xml"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -58,8 +58,8 @@ require_fixed "$SET_MODES" 'controller.activate();'
 require_fixed "$SET_MODES" 'requestWashModeCleanup("SCREEN_OFF")'
 require_fixed "$SET_MODES" 'requestWashModeCleanup("SCREEN_ON")'
 require_fixed "$SET_MODES" 'requestWashModeCleanup("power state " + powerStateName(state))'
-require_fixed "$RESTORE_MAIN" '.setMessage(R.string.wash_mode_confirmation)'
-require_fixed "$RESTORE_MAIN" 'if (!ok) showSnack(getString(R.string.service_not_ready));'
+require_fixed "$QUICK_ACTIONS" '.setMessage(R.string.wash_mode_confirmation)'
+require_fixed "$QUICK_ACTIONS" 'if (!nativeService.send(QuickActionsContract.MSG_WASH_MODE)) show("Сервис не готов");'
 require_fixed "$STRINGS" 'Автомобиль немедленно выключится.'
 require_fixed "$STRINGS" 'Для выхода из режима нажмите педаль тормоза.'
 
@@ -72,11 +72,11 @@ for FILE in "$CONTROLLER" "$LEASE"; do
     forbid_fixed "$FILE" 'TX77'
 done
 forbid_fixed "$SET_MODES" 'MSG_WASH_MODE_RESULT'
-forbid_fixed "$RESTORE_MAIN" 'Режим мойки активирован'
-forbid_fixed "$RESTORE_MAIN" 'washModeInFlight'
-forbid_fixed "$RESTORE_MAIN" 'washRequestId'
-forbid_fixed "$NATIVE_MAIN" 'WASH_MODE_FRAMES'
-forbid_fixed "$NATIVE_MAIN" 'sendWashModeCommand'
-forbid_fixed "$NATIVE_MAIN" 'CAR_CLEANING_MODE_SWITCH'
+forbid_fixed "$QUICK_ACTIONS" 'Режим мойки активирован'
+forbid_fixed "$QUICK_ACTIONS" 'washModeInFlight'
+forbid_fixed "$QUICK_ACTIONS" 'washRequestId'
+forbid_fixed "$NATIVE_FACADE" 'WASH_MODE_FRAMES'
+forbid_fixed "$NATIVE_FACADE" 'sendWashModeCommand'
+forbid_fixed "$NATIVE_FACADE" 'CAR_CLEANING_MODE_SWITCH'
 
 echo "PASS: wash mode transport uses bounded OEM TX6/TX58 session"

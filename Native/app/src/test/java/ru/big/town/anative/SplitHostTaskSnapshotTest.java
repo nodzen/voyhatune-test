@@ -39,4 +39,14 @@ public class SplitHostTaskSnapshotTest {
         assertFalse(SplitHostTaskSnapshot.known(Collections.emptyList())
                 .isAlive("music.app", 17));
     }
+
+    @Test
+    public void basePackageKeepsTaskAliveWhenExternalActivityIsOnTop() {
+        SplitHostTaskSnapshot snapshot = SplitHostTaskSnapshot.known(Arrays.asList(
+                new SplitHostTaskSnapshot.TaskRecord(1, "android", "music.app", 17)));
+
+        assertTrue(snapshot.isAlive("music.app", 17));
+        assertTrue(snapshot.isAlive("android", 17));
+        assertFalse(snapshot.isAlive("music.app", 18));
+    }
 }

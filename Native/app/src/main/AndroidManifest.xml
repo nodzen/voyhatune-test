@@ -229,17 +229,6 @@
             </intent-filter>
         </receiver>
 
-        <activity
-            android:name=".MainActivity"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <action android:name="ru.big.town.anative.MainActivity" />
-
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-
         <!-- Однопанельный/двухпанельный VirtualDisplay-хост (per-app DPI + живой ресайз) -->
         <activity
             android:name=".SplitHostActivity"

@@ -13,7 +13,7 @@ import java.util.function.BooleanSupplier;
  *
  * <p>Значение флага отладки приходит из настроек RestoreMode (SharedPreferences
  * {@code debugMode}) через ContentProvider и обновляется в
- * {@link MainActivity#initValueModes(android.content.Context)}.</p>
+ * {@link VehicleCommandFacade#initValueModes(android.content.Context)}.</p>
  */
 public final class CanSender {
     public static final String TAG = "$$$ CanSender $$$";
@@ -61,14 +61,14 @@ public final class CanSender {
         if (debugMode) {
             if (!beginFrameAttemptForCurrentGuard()) return false;
             Log.i(TAG, "EMULATE CAN [" + (label == null || label.isEmpty() ? "?" : label) + "]"
-                    + " cmd=" + cmdNum + " frame=" + MainActivity.printHexBinary(frame));
+                    + " cmd=" + cmdNum + " frame=" + CanFrameCodec.toHex(frame));
             return true;
         }
         final int res;
         synchronized (NATIVE_SEND_LOCK) {
             // A batch may have waited for another caller's transaction while the car went to sleep.
             if (!beginFrameAttemptForCurrentGuard()) return false;
-            res = MainActivity.cis_can_control_bytes(cmdNum, frame);
+            res = NativeCanBridge.send(cmdNum, frame);
         }
         if (res != 0) {
             Log.w(TAG, "CAN send failed (res=" + res + ") [" + label + "]");

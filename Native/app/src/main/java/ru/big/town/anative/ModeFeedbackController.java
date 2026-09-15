@@ -34,7 +34,7 @@ final class ModeFeedbackController implements AutoCloseable {
             if (modeKey != null) {
                 boolean rememberLast = !intent.hasExtra("rememberLast")
                         || intent.getBooleanExtra("rememberLast", true);
-                MainActivity.updateRememberLastMode(appContext, modeKey, rememberLast);
+                VehicleCommandFacade.updateRememberLastMode(appContext, modeKey, rememberLast);
                 return;
             }
 
@@ -46,7 +46,7 @@ final class ModeFeedbackController implements AutoCloseable {
                 rememberModes = !intent.hasExtra("rememberLast")
                         || intent.getBooleanExtra("rememberLast", true);
             }
-            MainActivity.updateRememberModes(appContext, rememberModes);
+            VehicleCommandFacade.updateRememberModes(appContext, rememberModes);
         }
     };
 

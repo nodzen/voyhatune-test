@@ -90,8 +90,8 @@ public class TripHistoryActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
-        registerReceiver(tripReceiver, new IntentFilter(MainActivity.ACTION_TRIP_UPDATE), RECEIVER_EXPORTED);
-        Intent req = new Intent(MainActivity.ACTION_REQUEST_TRIP_UPDATE);
+        registerReceiver(tripReceiver, new IntentFilter(QuickActionsContract.TRIP_UPDATE), RECEIVER_EXPORTED);
+        Intent req = new Intent(QuickActionsContract.TRIP_REQUEST);
         req.setPackage("ru.big.town.anative");
         sendBroadcast(req);
     }

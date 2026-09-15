@@ -26,7 +26,7 @@ import java.util.function.Consumer;
  *       приложения, которое на раннем пробуждении может быть ещё не поднято. Движок повторяет
  *       чтение с паузами: первые {@link #PROVIDER_ONLY_ATTEMPTS} попыток принимаются только
  *       свежие данные провайдера, дальше соглашаемся и на локальный кэш
- *       (см. {@link MainActivity#loadModes(Context, boolean)}).</li>
+ *       (см. {@link VehicleCommandFacade#loadModes(Context, boolean)}).</li>
  *   <li><b>Многократная отправка.</b> Команды шлются несколько раз (устойчивость к тому, что
  *       автомобиль может сбросить режим в первые секунды после пробуждения).</li>
  * </ul>
@@ -125,7 +125,7 @@ public final class ApplyEngine {
         }
     }
 
-    /** Полный снимок источника истины, прочитанный MainActivity из provider/cache. */
+    /** Полный снимок источника истины, прочитанный VehicleCommandFacade из provider/cache. */
     static void noteLoadedModes(String drive, String energy,
                                 boolean driveEnabled, boolean energyEnabled) {
         MODE_SYNC_POLICY.updateExpected(drive, energy, driveEnabled, energyEnabled);
@@ -212,7 +212,7 @@ public final class ApplyEngine {
             gateGeneration = MODE_SYNC_POLICY.currentGeneration();
         }
 
-        if (MainActivity.isLoadedMode(modeKey, observedMode)) return;
+        if (VehicleCommandFacade.isLoadedMode(modeKey, observedMode)) return;
 
         // Provider.update/broadcast may block on another process. Revalidate immediately before it,
         // then release RESTORE_LOCK so sleep can cancel CAN even if that external process is stuck.
@@ -222,7 +222,7 @@ public final class ApplyEngine {
                 return;
             }
         }
-        MainActivity.persistSavedMode(context, modeKey, observedMode);
+        VehicleCommandFacade.persistSavedMode(context, modeKey, observedMode);
     }
 
     private ApplyEngine() {}
@@ -575,7 +575,7 @@ public final class ApplyEngine {
                 return CycleResult.CANCELLED;
             }
             boolean allowCache = attempt > PROVIDER_ONLY_ATTEMPTS;
-            status = MainActivity.loadModes(ctx, allowCache);
+            status = VehicleCommandFacade.loadModes(ctx, allowCache);
             if (!RESTORE_RUN_STATE.isRestoreCurrent(wakeGeneration, restoreEpoch)) {
                 return CycleResult.CANCELLED;
             }
@@ -597,7 +597,7 @@ public final class ApplyEngine {
             // Validate every required command before sending the first frame. Unknown modes and
             // malformed mappings are permanent configuration errors, not a reason for 120 seconds
             // of CAN retries.
-            canPlan = MainActivity.createCanRestorePlan(repeatOemOnNextPass);
+            canPlan = VehicleCommandFacade.createCanRestorePlan(repeatOemOnNextPass);
         } catch (IllegalArgumentException e) {
             Log.e(TAG, "runCycle: permanent CAN plan error — " + e.getMessage());
             return CycleResult.FAILED;
@@ -645,7 +645,7 @@ public final class ApplyEngine {
                     () -> RESTORE_RUN_STATE.isRestoreCurrent(wakeGeneration, restoreEpoch),
                     () -> {
                         attemptResult[0] = canPlan.sendPending(
-                                (frames, label) -> MainActivity.setCanValues(1, frames, label));
+                                (frames, label) -> VehicleCommandFacade.setCanValues(1, frames, label));
                         return attemptResult[0].isComplete();
                     });
             if (!RESTORE_RUN_STATE.isRestoreCurrent(wakeGeneration, restoreEpoch)) {
@@ -706,7 +706,7 @@ public final class ApplyEngine {
         }
         byte[][] parsedCustomFrames;
         try {
-            parsedCustomFrames = validCanFrames(MainActivity.getCustomCommand());
+            parsedCustomFrames = validCanFrames(VehicleCommandFacade.getCustomCommand());
         } catch (RuntimeException e) {
             // A malformed optional custom string must not turn an already successful mode restore
             // into FAILED and provoke another correction/retry window.
@@ -718,19 +718,19 @@ public final class ApplyEngine {
             return CycleResult.CANCELLED;
         }
         if (customFrames.length > 0) {
-            for (int i = 0; i < MainActivity.customCommandCount; i++) {
+            for (int i = 0; i < VehicleCommandFacade.customCommandCount; i++) {
                 if (!RESTORE_RUN_STATE.isRestoreCurrent(wakeGeneration, restoreEpoch)) {
                     return CycleResult.CANCELLED;
                 }
                 CanSender.runGuardedSend(
                         () -> RESTORE_RUN_STATE.isRestoreCurrent(
                                 wakeGeneration, restoreEpoch),
-                        () -> MainActivity.setCanValues(
+                        () -> VehicleCommandFacade.setCanValues(
                                 1, customFrames, "custom command (unlock/wake)"));
                 if (!RESTORE_RUN_STATE.isRestoreCurrent(wakeGeneration, restoreEpoch)) {
                     return CycleResult.CANCELLED;
                 }
-                if (i + 1 < MainActivity.customCommandCount
+                if (i + 1 < VehicleCommandFacade.customCommandCount
                         && !waitWhileCurrent(pause, wakeGeneration, restoreEpoch)) {
                     return CycleResult.CANCELLED;
                 }

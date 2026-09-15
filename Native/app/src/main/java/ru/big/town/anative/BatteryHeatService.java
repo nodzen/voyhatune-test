@@ -50,7 +50,7 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * <p>Активация прогрева идёт через штатный {@code ICanBusService.setVehicleState}: H97X использует
  * {@code DRIVER_PREHEAT_SET}, H97C — {@code BATTERY_TEP_CONTROL_SWITCH}. Жёстко заданный raw-кадр
- * остаётся в {@link MainActivity} только как диагностический fallback и автоматически не вызывается.</p>
+ * остаётся в {@link VehicleCommandFacade} только как диагностический fallback и автоматически не вызывается.</p>
  */
 public class BatteryHeatService extends Service {
 

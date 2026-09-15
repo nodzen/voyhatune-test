@@ -123,7 +123,7 @@ bool ensureCanHalLoadedLocked() {
 
 extern "C"
 JNIEXPORT jint JNICALL
-Java_ru_big_town_anative_MainActivity_cis_1can_1control_1bytes(
+Java_ru_big_town_anative_NativeCanBridge_send(
         JNIEnv *env, jobject thiz, jint cmdNum, jbyteArray b_arr) {
     (void) thiz;
 

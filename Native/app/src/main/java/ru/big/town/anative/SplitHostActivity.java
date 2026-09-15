@@ -85,6 +85,8 @@ public class SplitHostActivity extends Activity {
     public static final String EXTRA_SPLIT      = "split";
     public static final String EXTRA_PRESET_IDX = "presetIdx";
     public static final String EXTRA_PRESET_ID  = "presetId";
+    /** User-launched same-preset requests ask an existing host to reconcile missing pane tasks. */
+    public static final String EXTRA_RECONCILE = "reconcilePanes";
 
     // Флаги VirtualDisplay. TRUSTED(1<<10) обязателен, чтобы на дисплей можно было запускать
     // чужие активити и (в перспективе) роутить ввод; требует ADD_TRUSTED_DISPLAY (privapp whitelist).
@@ -127,6 +129,9 @@ public class SplitHostActivity extends Activity {
         int dpi;            // 0 = дефолт дисплея (приходит из per-app настройки RestoreMode)
         int w, h;
         int vdWidth, vdHeight, vdDpi; // last dimensions successfully sent to VirtualDisplay
+        int pendingWidth, pendingHeight, pendingDpi;
+        int resizeAttempts;
+        Runnable resizeRunnable;
         long resizeVersion; // успешные vd.resize; нужен для снятия маски после реального layout обеих панелей
         boolean launched;
         boolean launchInFlight;
@@ -148,6 +153,8 @@ public class SplitHostActivity extends Activity {
     private SplitHostGenerationGate workGate;
     private boolean watchActive;
     private boolean hostDestroyed;
+    /** Survives an onNewIntent delivered before onResume; cleared only by an accepted result. */
+    private boolean paneHealthCheckPending;
     private final Runnable watchTick = new Runnable() {
         @Override public void run() {
             if (!watchActive || hostDestroyed) return;
@@ -298,10 +305,82 @@ public class SplitHostActivity extends Activity {
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        if (applyIncomingIntentInPlace(intent)) return;
         // Fence the old package/display before recreate posts a new Activity instance.
         retireAsyncHostWork(false);
         setIntent(intent);
         recreate();
+    }
+
+    /**
+     * RestoreMode frequently re-sends the current split while the host is already alive (screen-lift
+     * restore, a repeated preset click, or a saved ratio update). Recreating the Activity releases
+     * both VirtualDisplays and leaves two black surfaces for the removeTask/startActivity handoff.
+     * Keep the host when the pane identities are unchanged and only apply the new geometry in place.
+     */
+    private boolean applyIncomingIntentInPlace(Intent incoming) {
+        if (incoming == null || hostDestroyed) return false;
+        String incomingLeft = incoming.getStringExtra(EXTRA_LEFT);
+        String incomingRight = incoming.getStringExtra(EXTRA_RIGHT);
+        int incomingLeftDpi = incoming.getIntExtra(EXTRA_LEFT_DPI, 0);
+        int incomingRightDpi = incoming.getIntExtra(EXTRA_RIGHT_DPI, 0);
+        boolean incomingResizable = DIVIDER_RESIZE_GESTURE_ENABLED
+                && incoming.getBooleanExtra(EXTRA_RESIZABLE, false);
+        boolean currentSingle = right.pkg == null || right.pkg.isEmpty();
+        boolean incomingSingle = incomingRight == null || incomingRight.isEmpty();
+
+        if (!sameText(left.pkg, incomingLeft) || !sameText(right.pkg, incomingRight)
+                || left.dpi != incomingLeftDpi || right.dpi != incomingRightDpi
+                || currentSingle != incomingSingle || resizable != incomingResizable) {
+            return false;
+        }
+
+        setIntent(incoming);
+        presetIdx = incoming.getIntExtra(EXTRA_PRESET_IDX, -1);
+        presetId = incoming.getStringExtra(EXTRA_PRESET_ID);
+        if (presetId == null) presetId = "";
+
+        if (resizeState != ResizeState.IDLE) cancelResizeGesture();
+        int ratio = incoming.getIntExtra(EXTRA_RATIO, 1);
+        float requestedSplit = incoming.getFloatExtra(EXTRA_SPLIT, 0f);
+        if (incomingSingle) {
+            setWeight(left.container, 1f);
+            right.container.setVisibility(View.GONE);
+            Log.i(TAG, "onNewIntent: same single host kept in place");
+            return true;
+        }
+
+        if (resizable && isValidSplit(requestedSplit)) {
+            final float committed = clampFraction(requestedSplit);
+            applyFraction(committed);
+            lastDragFraction = committed;
+            prepareGeometryResize();
+            Log.i(TAG, "onNewIntent: same split kept in place, fraction=" + committed);
+        } else {
+            applyRatioWeights(ratio);
+            prepareGeometryResize();
+            Log.i(TAG, "onNewIntent: same split kept in place, ratio=" + ratio);
+        }
+        if (incoming.getBooleanExtra(EXTRA_RECONCILE, false)) {
+            requestPaneHealthCheck();
+        }
+        return true;
+    }
+
+    private static boolean sameText(String first, String second) {
+        return first == null ? second == null : first.equals(second);
+    }
+
+    private static boolean isValidSplit(float value) {
+        return !Float.isNaN(value) && !Float.isInfinite(value)
+                && value > 0.05f && value < 0.95f;
+    }
+
+    private void prepareGeometryResize() {
+        long now = System.currentTimeMillis();
+        left.launchedAt = now;
+        right.launchedAt = now;
+        resizeUntil = now + WATCH_GRACE_MS;
     }
 
     /**
@@ -332,24 +411,9 @@ public class SplitHostActivity extends Activity {
 
     // Вес левого окна по соотношению (0=3:4,1=1:1,2=4:3,3=5:2,4=2:5) — как во freeform-движке.
     private void applyRatioWeights(int ratio) {
-        float lw;
-        switch (ratio) {
-            case 0: lw = 3f; break;
-            case 2: lw = 4f; break;
-            case 3: lw = 5f; break;
-            case 4: lw = 2f; break;
-            default: lw = 1f; break;
-        }
-        float rw;
-        switch (ratio) {
-            case 0: rw = 4f; break;
-            case 2: rw = 3f; break;
-            case 3: rw = 2f; break;
-            case 4: rw = 5f; break;
-            default: rw = 1f; break;
-        }
-        setWeight(left.container, lw);
-        setWeight(right.container, rw);
+        float fraction = SplitHostGeometry.presetFraction(ratio);
+        setWeight(left.container, fraction);
+        setWeight(right.container, 1f - fraction);
     }
 
     private void setWeight(View v, float w) {
@@ -360,8 +424,9 @@ public class SplitHostActivity extends Activity {
 
     /** Разложить панели по доле левого окна (0..1). Веса суммируем в 1 — так проще считать драг. */
     private void applyFraction(float f) {
-        setWeight(left.container, f);
-        setWeight(right.container, 1f - f);
+        float bounded = clampFraction(f);
+        setWeight(left.container, bounded);
+        setWeight(right.container, 1f - bounded);
     }
 
     /** Текущая доля левого окна по фактической ширине панелей. */
@@ -391,19 +456,10 @@ public class SplitHostActivity extends Activity {
                     createVirtualDisplay(pane, holder.getSurface());
                     launchApp(pane);
                 } else if (sizeChanged) {
-                    // Реальные окна ресайзятся ТОЛЬКО на отпускании делителя (endResizeMask меняет вес
-                    // контейнера один раз) → ровно один surfaceChanged → один чистый vd.resize. Во время
-                    // драга сюда не заходим (веса панелей не меняем, двигаем только оверлей-маску).
-                    try {
-                        pane.vd.resize(width, height, effectiveDpi(pane));
-                        pane.vdWidth = width;
-                        pane.vdHeight = height;
-                        pane.vdDpi = dpi;
-                        pane.resizeVersion++;
-                        notifyPaneResized(pane);
-                    } catch (Exception e) {
-                        Log.w(TAG, "resize " + pane.side + " failed: " + e.getMessage());
-                    }
+                    // SurfaceView may publish two or three intermediate sizes during one layout
+                    // traversal (especially when the screen is lifted). Coalesce them so the hosted
+                    // Activity receives one stable configuration instead of a resize race.
+                    schedulePaneResize(pane, width, height, dpi);
                 }
             }
 
@@ -418,6 +474,55 @@ public class SplitHostActivity extends Activity {
             if (pane.vd != null) injectTouch(pane, ev);
             return true;
         });
+    }
+
+    private void schedulePaneResize(final Pane pane, int width, int height, int dpi) {
+        schedulePaneResize(pane, width, height, dpi, true);
+    }
+
+    private void schedulePaneResize(final Pane pane, int width, int height, int dpi,
+                                    boolean resetAttempts) {
+        pane.pendingWidth = width;
+        pane.pendingHeight = height;
+        pane.pendingDpi = dpi;
+        if (resetAttempts) pane.resizeAttempts = 0;
+        if (pane.resizeRunnable != null) watchHandler.removeCallbacks(pane.resizeRunnable);
+        pane.resizeRunnable = () -> {
+            pane.resizeRunnable = null;
+            if (hostDestroyed || pane.vd == null) return;
+            int targetWidth = pane.pendingWidth;
+            int targetHeight = pane.pendingHeight;
+            int targetDpi = pane.pendingDpi;
+            if (targetWidth <= 0 || targetHeight <= 0
+                    || (pane.vdWidth == targetWidth && pane.vdHeight == targetHeight
+                    && pane.vdDpi == targetDpi)) return;
+            try {
+                pane.vd.resize(targetWidth, targetHeight, targetDpi);
+                pane.vdWidth = targetWidth;
+                pane.vdHeight = targetHeight;
+                pane.vdDpi = targetDpi;
+                pane.resizeVersion++;
+                pane.resizeAttempts = 0;
+                notifyPaneResized(pane);
+                Log.i(TAG, "resize settled " + pane.side + " " + targetWidth + "x"
+                        + targetHeight + " dpi=" + targetDpi);
+            } catch (Exception e) {
+                pane.resizeAttempts++;
+                Log.w(TAG, "resize " + pane.side + " failed (attempt "
+                        + pane.resizeAttempts + "): " + e.getMessage());
+                if (pane.resizeAttempts < 4 && !hostDestroyed) schedulePaneResizeRetry(pane);
+            }
+        };
+        watchHandler.postDelayed(pane.resizeRunnable, 50L);
+    }
+
+    private void schedulePaneResizeRetry(final Pane pane) {
+        pane.resizeRunnable = () -> {
+            pane.resizeRunnable = null;
+            if (hostDestroyed || pane.vd == null) return;
+            schedulePaneResize(pane, pane.pendingWidth, pane.pendingHeight, pane.pendingDpi, false);
+        };
+        watchHandler.postDelayed(pane.resizeRunnable, 120L);
     }
 
     private void createVirtualDisplay(Pane pane, Surface surface) {
@@ -513,7 +618,16 @@ public class SplitHostActivity extends Activity {
         // Во время ресайза приложение получает смену конфигурации и может пересоздаться — в этот
         // момент его задачи на дисплее нет. Без этой паузы надзиратель принял бы это за падение и
         // перезапустил приложение прямо под рукой пользователя.
-        if (dragging || System.currentTimeMillis() < resizeUntil) return;
+        if (dragging) return;
+        // An explicit retry is stronger than the post-resize grace period and must not wait eight
+        // seconds before rebuilding a pane which the user can already see is empty.
+        if (paneHealthCheckPending) {
+            requestPaneHealthCheck();
+            return;
+        }
+        if (System.currentTimeMillis() < resizeUntil) return;
+        ensurePaneRunning(left);
+        ensurePaneRunning(right);
         long now = System.currentTimeMillis();
         List<SplitHostTaskLane.PaneTicket> panes = new ArrayList<>(2);
         addSupervisionTicket(panes, left, now);
@@ -521,6 +635,46 @@ public class SplitHostActivity extends Activity {
         if (panes.isEmpty()) return;
         taskLane.requestSupervision(this, workGate.hostGeneration(),
                 workGate.currentSupervisionGeneration(), panes);
+    }
+
+    /** Reconcile a repeated user launch without tearing down a healthy split. */
+    private void requestPaneHealthCheck() {
+        paneHealthCheckPending = true;
+        // A background singleTop Activity receives onNewIntent before onResume. Queueing with the
+        // old supervision generation would guarantee that the worker result is discarded.
+        if (hostDestroyed || !watchActive || taskLane == null || workGate == null) return;
+        List<SplitHostTaskLane.PaneTicket> panes = new ArrayList<>(2);
+        addHealthTicket(panes, left);
+        addHealthTicket(panes, right);
+        if (panes.isEmpty()) return;
+        taskLane.requestPaneHealthCheck(this, workGate.hostGeneration(),
+                workGate.currentSupervisionGeneration(), panes);
+        Log.i(TAG, "same split launch: queued pane health check");
+    }
+
+    private void addHealthTicket(List<SplitHostTaskLane.PaneTicket> tickets, Pane pane) {
+        if (pane.vd == null || pane.launchInFlight || pane.pkg == null || pane.pkg.isEmpty()) return;
+        Integer displayId = paneDisplayId(pane);
+        if (displayId == null) return;
+        int index = paneIndex(pane);
+        tickets.add(new SplitHostTaskLane.PaneTicket(workGate.hostGeneration(), index,
+                workGate.currentPaneGeneration(index), pane.pkg, displayId));
+    }
+
+    /** Rebuilds a lost VD as soon as its SurfaceView is valid; watchdog must not wait for a restart. */
+    private void ensurePaneRunning(Pane pane) {
+        if (hostDestroyed || pane.vd != null || pane.view == null
+                || pane.pkg == null || pane.pkg.isEmpty() || pane.w <= 0 || pane.h <= 0) return;
+        Surface surface = pane.view.getHolder().getSurface();
+        if (surface == null || !surface.isValid()) return;
+        Log.w(TAG, "pane " + pane.side + " lost VirtualDisplay — rebuilding it");
+        // A lost VD is also a lost launch target. releasePane normally clears this flag through
+        // SurfaceView.surfaceDestroyed, but OEM teardown can drop the display without delivering
+        // that callback; leave launched=true here and launchApp would silently skip the rebuild.
+        pane.launched = false;
+        pane.launchInFlight = false;
+        createVirtualDisplay(pane, surface);
+        launchApp(pane);
     }
 
     private void addSupervisionTicket(List<SplitHostTaskLane.PaneTicket> tickets,
@@ -539,14 +693,23 @@ public class SplitHostActivity extends Activity {
                                SplitHostTaskSnapshot snapshot) {
         if (workGate == null || !workGate.acceptsSupervision(
                 request.hostGeneration, request.supervisionGeneration)) return;
-        if (!enabled || dragging || System.currentTimeMillis() < resizeUntil) return;
+        if (request.immediate) paneHealthCheckPending = false;
+        if (!enabled || dragging || (!request.immediate
+                && System.currentTimeMillis() < resizeUntil)) return;
         for (SplitHostTaskLane.PaneTicket ticket : request.panes) {
             if (!isPaneTicketCurrent(ticket)) continue;
             Pane pane = paneForIndex(ticket.paneIndex);
-            if (pane.launchInFlight || System.currentTimeMillis() - pane.launchedAt < WATCH_GRACE_MS) {
+            if (pane.launchInFlight || (!request.immediate
+                    && System.currentTimeMillis() - pane.launchedAt < WATCH_GRACE_MS)) {
                 continue;
             }
-            supervisePane(pane, snapshot.isAlive(ticket.packageName, ticket.displayId));
+            boolean alive = snapshot.isAlive(ticket.packageName, ticket.displayId);
+            if (request.immediate && !alive) {
+                // A user retry is allowed to recover a pane even if the watchdog had already
+                // reached its normal restart budget.
+                pane.restarts = 0;
+            }
+            supervisePane(pane, alive);
         }
     }
 
@@ -635,6 +798,14 @@ public class SplitHostActivity extends Activity {
             try { pane.vd.release(); } catch (Exception ignored) {}
             pane.vd = null;
         }
+        if (pane.resizeRunnable != null) {
+            watchHandler.removeCallbacks(pane.resizeRunnable);
+            pane.resizeRunnable = null;
+        }
+        pane.pendingWidth = 0;
+        pane.pendingHeight = 0;
+        pane.pendingDpi = 0;
+        pane.resizeAttempts = 0;
         pane.vdWidth = 0;
         pane.vdHeight = 0;
         pane.vdDpi = 0;
@@ -815,19 +986,15 @@ public class SplitHostActivity extends Activity {
         View divider = findViewById(R.id.splitDivider);
         int usable = panes.getWidth() - divider.getWidth();
         if (usable <= 0) return startFraction;
+        return clampFraction(startFraction + dx / usable);
+    }
 
-        float leftMin = MIN_PANE_DP * effectiveDpi(left) / 160f / usable;
-        float rightMin = MIN_PANE_DP * effectiveDpi(right) / 160f / usable;
-        // Если выбранные DPI физически не оставляют 260dp обеим панелям, сохраняем их пропорцию,
-        // но оставляем хотя бы 10% общего диапазона для движения делителя.
-        float minSum = leftMin + rightMin;
-        if (minSum > 0.90f) {
-            float scale = 0.90f / minSum;
-            leftMin *= scale;
-            rightMin *= scale;
-        }
-        float f = startFraction + dx / usable;
-        return Math.max(leftMin, Math.min(1f - rightMin, f));
+    private float clampFraction(float value) {
+        View panes = findViewById(R.id.splitPanes);
+        View divider = findViewById(R.id.splitDivider);
+        int usable = panes == null || divider == null ? 0 : panes.getWidth() - divider.getWidth();
+        return SplitHostGeometry.clampFraction(value, usable,
+                effectiveDpi(left), effectiveDpi(right), MIN_PANE_DP);
     }
 
     /** Снять размытые снимки обеих панелей и показать оверлей вместо живых окон. */
@@ -837,6 +1004,7 @@ public class SplitHostActivity extends Activity {
         dragging = true;
         resizeUntil = System.currentTimeMillis() + 60_000;  // надзиратель молчит, пока тянем
         ensureMaskOverlay();
+        resetMaskPreviewTransforms();
         gripPressed(maskGrip, true);
         if (maskOverlay != null) maskOverlay.animate().cancel();
         if (maskLeft != null) maskLeft.setImageDrawable(null);
@@ -865,9 +1033,54 @@ public class SplitHostActivity extends Activity {
         int lw = Math.round(usable * f);
         // Preview обязан сам рисовать непрозрачный divider. Настоящий divider находится под этим
         // оверлеем; прозрачный зазор между maskLeft/maskRight показывал бы старые SurfaceView.
-        setLp(maskLeft,  lw, 0);
-        setLp(maskRight, usable - lw, lw + divider.getWidth());
-        setLp(maskDivider, divider.getWidth(), lw);
+        if (maskBaseLeftWidth <= 0 || maskBaseRightWidth <= 0) {
+            initializeMaskPreviewGeometry(usable, divider.getWidth());
+        }
+        // Do not touch LayoutParams here. A divider MOVE can arrive every few milliseconds;
+        // relayouting the FrameLayout would stall the UI and can cause SurfaceView churn. The
+        // preview children have a fixed base layout and are moved/scaled by RenderThread-only
+        // properties instead.
+        float leftScale = maskBaseLeftWidth > 0 ? (float) lw / maskBaseLeftWidth : 1f;
+        float rightScale = maskBaseRightWidth > 0
+                ? (float) (usable - lw) / maskBaseRightWidth : 1f;
+        float dx = lw - maskBaseLeftWidth;
+        maskLeft.setScaleX(leftScale);
+        maskRight.setScaleX(rightScale);
+        maskRight.setTranslationX(dx);
+        maskDivider.setTranslationX(dx);
+    }
+
+    private int maskBaseLeftWidth;
+    private int maskBaseRightWidth;
+
+    private void initializeMaskPreviewGeometry(int usable, int dividerWidth) {
+        if (maskLeft == null || maskRight == null || maskDivider == null) return;
+        maskBaseLeftWidth = left.container.getWidth();
+        maskBaseRightWidth = right.container.getWidth();
+        if (maskBaseLeftWidth <= 0 || maskBaseRightWidth <= 0) return;
+        setLp(maskLeft, maskBaseLeftWidth, 0);
+        setLp(maskRight, maskBaseRightWidth, maskBaseLeftWidth + dividerWidth);
+        setLp(maskDivider, dividerWidth, maskBaseLeftWidth);
+        maskLeft.setPivotX(0f);
+        maskLeft.setPivotY(0f);
+        maskRight.setPivotX(0f);
+        maskRight.setPivotY(0f);
+        maskDivider.setPivotX(0f);
+        maskDivider.setPivotY(0f);
+    }
+
+    private void resetMaskPreviewTransforms() {
+        if (maskLeft != null) {
+            maskLeft.setScaleX(1f);
+            maskLeft.setTranslationX(0f);
+        }
+        if (maskRight != null) {
+            maskRight.setScaleX(1f);
+            maskRight.setTranslationX(0f);
+        }
+        if (maskDivider != null) maskDivider.setTranslationX(0f);
+        maskBaseLeftWidth = 0;
+        maskBaseRightWidth = 0;
     }
 
     private void setLp(View v, int w, int leftMargin) {
@@ -895,14 +1108,14 @@ public class SplitHostActivity extends Activity {
         // Сдвиг делителя был визуальным (translationX) — снимаем его, дальше позицию задаёт вес.
         View divider = findViewById(R.id.splitDivider);
         if (divider != null) divider.setTranslationX(0f);
-        applyFraction(f);                                    // ЕДИНСТВЕННАЯ смена веса за весь жест
+        final float committed = clampFraction(f);
+        applyFraction(committed);                            // ЕДИНСТВЕННАЯ смена веса за весь жест
         // Activity приложения может пересоздаваться после display configuration change. Даём тот же
         // grace, что при первоначальном запуске, и не пытаемся объявить её мёртвой через 630 ms.
         long now = System.currentTimeMillis();
         left.launchedAt = now;
         right.launchedAt = now;
         resizeUntil = now + WATCH_GRACE_MS;
-        saveFraction(f);
         waitForSurfaceResize(generation, leftVersion, rightVersion, 0);
     }
 
@@ -910,7 +1123,7 @@ public class SplitHostActivity extends Activity {
     private void waitForSurfaceResize(int generation, long leftBefore, long rightBefore, int attempt) {
         View root = findViewById(R.id.splitHostRoot);
         if (root == null) return;
-        boolean resized = left.resizeVersion > leftBefore && right.resizeVersion > rightBefore;
+        boolean resized = paneResizeSettled(left) && paneResizeSettled(right);
         if (!resized && attempt < 20) {
             root.postDelayed(() -> waitForSurfaceResize(generation, leftBefore, rightBefore, attempt + 1), 50);
             return;
@@ -922,12 +1135,24 @@ public class SplitHostActivity extends Activity {
         if (generation != resizeGeneration || resizeState != ResizeState.SETTLING) return;
         Runnable done = () -> {
             if (generation != resizeGeneration) return;
+            if (left.container.getWidth() > 0 && right.container.getWidth() > 0) {
+                float actual = clampFraction(currentFraction());
+                lastDragFraction = actual;
+                saveFraction(actual);
+            }
             if (maskOverlay != null) maskOverlay.setVisibility(View.GONE);
+            resetMaskPreviewTransforms();
             resizeState = ResizeState.IDLE;
         };
         if (maskOverlay == null) { done.run(); return; }
         maskOverlay.animate().cancel();
         maskOverlay.animate().alpha(0f).setDuration(180).withEndAction(done).start();
+    }
+
+    private boolean paneResizeSettled(Pane pane) {
+        if (pane.pkg == null || pane.pkg.isEmpty()) return true;
+        return pane.vd != null && pane.vdWidth == pane.w && pane.vdHeight == pane.h
+                && pane.vdDpi == effectiveDpi(pane);
     }
 
     /** CANCEL и двойной тап не должны менять пропорцию или сохранять случайную rawX. */
@@ -942,6 +1167,7 @@ public class SplitHostActivity extends Activity {
             maskOverlay.animate().cancel();
             maskOverlay.setVisibility(View.GONE);
         }
+        resetMaskPreviewTransforms();
         resizeUntil = 0L;
     }
 
@@ -1149,6 +1375,7 @@ public class SplitHostActivity extends Activity {
         // и «пропажа» там ожидаема — перезапускать нечего.
         watchActive = true;
         if (workGate != null) workGate.resumeSupervision();
+        if (paneHealthCheckPending) requestPaneHealthCheck();
         watchHandler.removeCallbacks(watchTick);
         watchHandler.postDelayed(watchTick, WATCH_PERIOD_MS);
     }
@@ -1285,6 +1512,7 @@ public class SplitHostActivity extends Activity {
             i.putExtra(EXTRA_SPLIT, split);
             i.putExtra(EXTRA_PRESET_IDX, presetIdx);
             i.putExtra(EXTRA_PRESET_ID, presetId);
+            i.putExtra(EXTRA_RECONCILE, remember);
             DockLaunchGuard.arm(ctx, 0, "ru.big.town.anative");
             ctx.startActivity(i);
             Log.i(TAG, "launchSplit host started " + left + "/" + right);

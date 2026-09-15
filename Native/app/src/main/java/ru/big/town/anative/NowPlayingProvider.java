@@ -38,6 +38,8 @@ public class NowPlayingProvider extends ContentProvider {
     /** Native OEM media-widget transport API; separate caller policy from steering-wheel keys. */
     public static final String METHOD_MEDIA_CONTROL = "media_control";
     public static final String METHOD_SELECT_SOURCE = "select_source";
+    /** OEM source picker selected BT/DAB/USB, so a persisted third-party pin must be released. */
+    public static final String METHOD_CLEAR_SOURCE = "clear_source";
 
     public static final String AUTHORITY = "ru.big.town.anative.nowplaying";
     public static final Uri CONTENT_URI  = Uri.parse("content://" + AUTHORITY);
@@ -122,6 +124,12 @@ public class NowPlayingProvider extends ContentProvider {
             enforceSourceSelectionCaller();
             Bundle result = new Bundle();
             result.putBoolean("selected", NowPlayingService.selectSource(arg));
+            return result;
+        }
+        if (METHOD_CLEAR_SOURCE.equals(method)) {
+            enforceSourceSelectionCaller();
+            Bundle result = new Bundle();
+            result.putBoolean("cleared", NowPlayingService.clearSourceSelection());
             return result;
         }
         if (!METHOD_MEDIA_COMMAND.equals(method) && !METHOD_MEDIA_CONTROL.equals(method)) {

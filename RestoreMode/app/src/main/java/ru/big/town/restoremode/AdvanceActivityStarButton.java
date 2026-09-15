@@ -2,9 +2,7 @@ package ru.big.town.restoremode;
 
 import android.graphics.Color;
 import android.os.Bundle;
-import android.os.Message;
-import android.os.Messenger;
-import android.os.RemoteException;
+import android.content.SharedPreferences;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.util.Log;
@@ -21,8 +19,8 @@ public class AdvanceActivityStarButton extends AppCompatActivity {
     private EditText canCommandEditorStarButton1, canCommandEditorStarButton2;
     private Button buttonSaveStarButton, buttonApplyStarButton1, buttonApplyStarButton2, buttonBackStarButton;
     private NumberPicker pickerCustomCommandCountStarButton;
-    private Messenger serviceMessenger;
-    private boolean isBound;
+    private SharedPreferences prefs;
+    private NativeServiceClient nativeService;
     static final int MSG_RESULT = 4;
 
     private String customCommandStarButton1 = "";
@@ -38,35 +36,18 @@ public class AdvanceActivityStarButton extends AppCompatActivity {
     }
 
     public void onButtonClickSaveStarButton(View v) {
-        GlobalVars.editor.putString("customCommandStarButton1", canCommandEditorStarButton1.getText().toString());
-        GlobalVars.editor.putString("customCommandStarButton2", canCommandEditorStarButton2.getText().toString());
-        GlobalVars.editor.apply();
+        prefs.edit()
+                .putString("customCommandStarButton1", canCommandEditorStarButton1.getText().toString())
+                .putString("customCommandStarButton2", canCommandEditorStarButton2.getText().toString())
+                .apply();
     }
 
     public void onButtonClickApplyStarButton1(View v) {
-        if (GlobalVars.isBound) {
-            try {
-                Message msg = Message.obtain(null, MSG_APPLY_DRIVE_MODES_STAR_BUTTON);
-                msg.replyTo = GlobalVars.clientMessenger;
-                msg.arg1=1;
-                GlobalVars.serviceMessenger.send(msg);
-            } catch (RemoteException e) {
-                e.printStackTrace();
-            }
-        }
+        nativeService.send(MSG_APPLY_DRIVE_MODES_STAR_BUTTON, 1);
     }
 
     public void onButtonClickApplyStarButton2(View v) {
-        if (GlobalVars.isBound) {
-            try {
-                Message msg = Message.obtain(null, MSG_APPLY_DRIVE_MODES_STAR_BUTTON);
-                msg.replyTo = GlobalVars.clientMessenger;
-                msg.arg1=2;
-                GlobalVars.serviceMessenger.send(msg);
-            } catch (RemoteException e) {
-                e.printStackTrace();
-            }
-        }
+        nativeService.send(MSG_APPLY_DRIVE_MODES_STAR_BUTTON, 2);
     }
 
     public void onButtonClickBackStarButton(View v) {
@@ -79,6 +60,9 @@ public class AdvanceActivityStarButton extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         EdgeToEdge.enable(this);
         setContentView(R.layout.activity_advance_start_button);
+        prefs = getSharedPreferences("DrivePreferences", MODE_PRIVATE);
+        nativeService = new NativeServiceClient(this);
+        nativeService.connect();
 
         canCommandEditorStarButton1 = findViewById(R.id.rawCanCodesStarButton1);
         buttonApplyStarButton1 = findViewById(R.id.buttonApplyStarButton1);
@@ -88,9 +72,9 @@ public class AdvanceActivityStarButton extends AppCompatActivity {
         buttonSaveStarButton = findViewById(R.id.buttonSaveStarButton);
         buttonBackStarButton = findViewById(R.id.buttonBackStarButton);
 
-        customCommandStarButton1 = GlobalVars.sharedPreferences.getString("customCommandStarButton1", "");
+        customCommandStarButton1 = prefs.getString("customCommandStarButton1", "");
         canCommandEditorStarButton1.setText(customCommandStarButton1);
-        customCommandStarButton2 = GlobalVars.sharedPreferences.getString("customCommandStarButton2", "");
+        customCommandStarButton2 = prefs.getString("customCommandStarButton2", "");
         canCommandEditorStarButton2.setText(customCommandStarButton2);
 
 
@@ -228,6 +212,7 @@ public class AdvanceActivityStarButton extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        if (nativeService != null) nativeService.close();
         super.onDestroy();
     }
 }

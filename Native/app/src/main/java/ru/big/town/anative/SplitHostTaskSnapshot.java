@@ -12,13 +12,27 @@ import java.util.Set;
 final class SplitHostTaskSnapshot {
     static final class TaskRecord {
         final int taskId;
+        /** Top activity package, or the base package when the top activity is unavailable. */
         final String packageName;
+        /** A task can temporarily show another package on top (chooser/external activity). */
+        final String basePackageName;
         final Integer displayId;
 
         TaskRecord(int taskId, String packageName, Integer displayId) {
+            this(taskId, packageName, null, displayId);
+        }
+
+        TaskRecord(int taskId, String topPackageName, String basePackageName, Integer displayId) {
             this.taskId = taskId;
-            this.packageName = packageName;
+            this.packageName = topPackageName != null && !topPackageName.isEmpty()
+                    ? topPackageName : basePackageName;
+            this.basePackageName = basePackageName;
             this.displayId = displayId;
+        }
+
+        boolean belongsTo(String packageName) {
+            if (packageName == null || packageName.isEmpty()) return false;
+            return packageName.equals(this.packageName) || packageName.equals(basePackageName);
         }
     }
 
@@ -37,15 +51,23 @@ final class SplitHostTaskSnapshot {
         this.packages = new HashMap<>();
         if (!known) return;
         for (TaskRecord task : taskRecords) {
-            if (task == null || task.packageName == null || task.packageName.isEmpty()) continue;
-            PackageState state = packages.get(task.packageName);
-            if (state == null) {
-                state = new PackageState();
-                packages.put(task.packageName, state);
+            if (task == null) continue;
+            addPackageState(task.packageName, task.displayId);
+            if (task.basePackageName != null && !task.basePackageName.equals(task.packageName)) {
+                addPackageState(task.basePackageName, task.displayId);
             }
-            if (task.displayId == null) state.hasUnknownDisplay = true;
-            else state.displayIds.add(task.displayId);
         }
+    }
+
+    private void addPackageState(String packageName, Integer displayId) {
+        if (packageName == null || packageName.isEmpty()) return;
+        PackageState state = packages.get(packageName);
+        if (state == null) {
+            state = new PackageState();
+            packages.put(packageName, state);
+        }
+        if (displayId == null) state.hasUnknownDisplay = true;
+        else state.displayIds.add(displayId);
     }
 
     static SplitHostTaskSnapshot unknown() {

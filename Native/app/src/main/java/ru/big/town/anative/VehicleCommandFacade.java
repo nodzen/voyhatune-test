@@ -1,24 +1,17 @@
 package ru.big.town.anative;
 
-import androidx.appcompat.app.AppCompatActivity;
-
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.content.pm.ActivityInfo;
 import android.database.Cursor;
 import android.net.Uri;
-import android.os.Build;
-import android.os.Bundle;
 import android.util.Log;
-import android.view.View;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-import ru.big.town.anative.databinding.ActivityMainBinding;
-
-public class MainActivity extends AppCompatActivity {
+/** Stateless entry points and the latest persisted vehicle-mode snapshot used by Native services. */
+final class VehicleCommandFacade {
     public static String driveMode = "INDIVIDUAL";
     private static String energy = "SREV";
     private static String recycle = "LOW";
@@ -52,103 +45,22 @@ public class MainActivity extends AppCompatActivity {
     private static boolean pauseMediaOnDoorClose = false;
     private static boolean pauseMediaOnAnyDoor = false;
 
-    //-------------- Вспомогательная шляпа не паримся ---------------------
-    public static void printBytesArrayToLog(String TAG, byte[][] bytes) {
-        for (byte[] b : bytes) {
-            Log.i(TAG, printHexBinary(b));
-        }
-    }
-
-    public static String printHexBinary(byte[] data) {
-        StringBuilder hexString = new StringBuilder();
-        for (byte b : data) {
-            hexString.append(String.format("%02X ", b));
-        }
-        return hexString.toString();
-    }
-
-    private static int hexToBin(char ch) {
-        if ('0' <= ch && ch <= '9') {
-            return ch - '0';
-        }
-        if ('A' <= ch && ch <= 'F') {
-            return ch - 'A' + 10;
-        }
-        if ('a' <= ch && ch <= 'f') {
-            return ch - 'a' + 10;
-        }
-        return -1;
-    }
-
-    public static byte[] parseHexBinary(String s) {
-        s = s.replace(" ", "");
-        final int len = s.length();
-
-        // "111" is not a valid hex encoding.
-        if (len % 2 != 0) {
-            throw new IllegalArgumentException("hexBinary needs to be even-length: " + s);
-        }
-
-        byte[] out = new byte[len / 2];
-
-        for (int i = 0; i < len; i += 2) {
-            int h = hexToBin(s.charAt(i));
-            int l = hexToBin(s.charAt(i + 1));
-            if (h == -1 || l == -1) {
-                throw new IllegalArgumentException("contains illegal character for hexBinary: " + s);
-            }
-
-            out[i / 2] = (byte) (h * 16 + l);
-        }
-
-        return out;
-    }
-
-    public static byte[][] arraysStr2arraysBytes(String[] cmds) {
-        if (cmds == null) {   // неизвестное имя режима (несовпадение ключа) → пустой набор, а не NPE
-            Log.w("$$$ MAIN arraysStr2arraysBytes $$$", "cmds=null (неизвестный режим?) → пустой набор");
-            return new byte[0][];
-        }
-        int indexCmd = 0;
-        byte[][] cmdsBytes = new byte[cmds.length][10];
-        for (String cmd : cmds) {
-            cmdsBytes[indexCmd] = parseHexBinary(cmd);
-            indexCmd++;
-        }
-        // Не логируем каждый разобранный frame: один wake-restore создаёт десятки таких строк,
-        // а серия proximity wake/sleep превращала форматирование и logd I/O в отдельный усилитель
-        // нагрузки. В debug-режиме фактически отправляемые кадры уже логирует CanSender.
-        return cmdsBytes;
-    }
-    //-------------- Вспомогательная шляпа не паримся ---------------------
-
-
-    //------------- Загружаем нашу JNI ------------------------------------
-    static {
-        System.loadLibrary("anative");
-    }
-
-    public static native int cis_can_control_bytes(int cmdNum, byte[] bArr);
-
-
-    private ActivityMainBinding binding;
-
     //------------- OEM VehicleState-команды режимов энергии ----------------------------------------
     public static byte[][] getCustomCommand() {
         if (customCommand == null || customCommand.isEmpty()) return new byte[][]{{}};
         String[] cmds = customCommand.split("\n");
-        return arraysStr2arraysBytes(cmds);
+        return CanFrameCodec.parseAll(cmds);
     }
 
     public static byte[][] getCustomCommandStarButton1() {
         if (customCommandStarButton1 == null || customCommandStarButton1.isEmpty()) return new byte[][]{{}};
         String[] cmds = customCommandStarButton1.split("\n");
-        return arraysStr2arraysBytes(cmds);
+        return CanFrameCodec.parseAll(cmds);
     }
     public static byte[][] getCustomCommandStarButton2() {
         if (customCommandStarButton2 == null || customCommandStarButton2.isEmpty()) return new byte[][]{{}};
         String[] cmds = customCommandStarButton2.split("\n");
-        return arraysStr2arraysBytes(cmds);
+        return CanFrameCodec.parseAll(cmds);
     }
 
     public static boolean sendEnergyModeCommand(Context context, String mode) {
@@ -231,32 +143,6 @@ public class MainActivity extends AppCompatActivity {
             return true;
         }
         return HeadlightCanTransport.sendAutoPair(context, lowBeam);
-    }
-
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-
-        Intent serviceIntent = new Intent(this, SetModesService.class);
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent);
-        } else {
-            startService(serviceIntent);
-        }
-
-        // Открытие Native остаётся ручным recovery-path при пропущенном power/screen callback. Движок
-        // дедебаунсит этот триггер с service-start и не создаёт параллельную прямую CAN-отправку.
-        ApplyEngine.scheduleApply("Native activity opened");
-        //binding = ActivityMainBinding.inflate(getLayoutInflater());
-        //setContentView(binding.getRoot());
-        setContentView(R.layout.activity_main);
-        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
-
-
-        // Example of a call to a native method
-//        TextView tv = binding.sampleText;
-//        tv.setText("----------");
     }
 
     public static boolean setCanValues(int cmdNum, byte[][] cmds) {
@@ -580,7 +466,7 @@ public class MainActivity extends AppCompatActivity {
                     "sendBatteryHeatCommand: CAN-команда прогрева ещё не задана (заглушка BATTERY_HEAT_FRAMES)");
             return false;
         }
-        return setCanValues(1, arraysStr2arraysBytes(BATTERY_HEAT_FRAMES), "battery preheat");
+        return setCanValues(1, CanFrameCodec.parseAll(BATTERY_HEAT_FRAMES), "battery preheat");
     }
 
     /** Немедленно применить звук пешеходов (тоггл с главного экрана). disabled=true → заглушить. */
@@ -978,35 +864,6 @@ public class MainActivity extends AppCompatActivity {
         } else {
             Log.w(MODES_LOG, "persistSavedToggle " + key + "=" + value + " — провайдер НЕ записан");
         }
-    }
-
-    public void onButtonClick(View v) {
-        Log.i("$$$ MainActivity click $$$", "");
-//                IntentFilter filter = new IntentFilter();
-//        filter.addAction("android.os.action.POWER_SAVE_MODE_CHANGED");
-//        filter.addAction("android.intent.action.SCREEN_ON");
-//        filter.addAction("com.android.server.jobscheduler.GARAGE_MODE_StarButton");
-//        filter.addAction("ru.big.town.anative.APPLY_DRIVE_MODES");
-//        filter.addAction("ru.big.town.anative.APPLY_DRIVE_MODES_FROM_POWERMANAGER");
-//
-//        // Register receiver with filter
-//        BroadcastReceiver setModesReceiver = new SetModesReceiver();
-//
-//        LocalBroadcastManager.getInstance(this).registerReceiver(setModesReceiver, filter);
-        //LocalBroadcastManager.getInstance(this).sendBroadcast(new Intent("ru.big.town.anative.APPLY_DRIVE_MODES"));
-        ApplyEngine.scheduleApply("MainActivity button");
-        //initValueModes(getApplicationContext());
-        //runCmds();
-    }
-    @Override
-        public void onPause(){
-        Log.i("$$$ MainActivity click $$$", "onPause()");
-        super.onPause();
-    }
-    @Override
-    public void onStop(){
-        Log.i("$$$ MainActivity click $$$", "onStop()");
-        super.onStop();
     }
 
 }

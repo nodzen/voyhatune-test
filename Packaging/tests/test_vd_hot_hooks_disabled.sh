@@ -8,7 +8,7 @@ RECEIVER="$ROOT/Native/app/src/main/java/ru/big/town/anative/SetModesReceiverDyn
 SERVICE="$ROOT/Native/app/src/main/java/ru/big/town/anative/SetModesService.java"
 HOST="$ROOT/Native/app/src/main/java/ru/big/town/anative/SplitHostActivity.java"
 MANIFEST="$ROOT/Native/app/src/main/AndroidManifest.xml"
-RESTORE_MAIN="$ROOT/RestoreMode/app/src/main/java/ru/big/town/restoremode/MainActivity.java"
+QUICK_ACTIONS="$ROOT/RestoreMode/app/src/main/java/ru/big/town/restoremode/QuickActionsController.java"
 
 fail() {
     echo "vd/freeform hook contract test failed: $*" >&2
@@ -301,9 +301,9 @@ grep -Fq 'if (right == null || right.isEmpty())' "$SERVICE" \
     || fail "single app Messenger request is not separated from VD split"
 grep -Fq 'SetModesReceiverDynamic.openFreeformApp(' "$SERVICE" \
     || fail "VoyahTune single app request does not use physical target task"
-grep -Fq 'sendAppWindow(pkg)' "$RESTORE_MAIN" \
-    || fail "VoyahTune app tile still uses the old single-VD path"
-if grep -Fq 'sendAppVd' "$RESTORE_MAIN"; then
+grep -Fq 'MSG_OPEN_APP_OR_SPLIT, 1, data, null' "$QUICK_ACTIONS" \
+    || fail "VoyahTune app tile does not use the physical single-app path"
+if grep -Fq 'sendAppVd' "$QUICK_ACTIONS"; then
     fail "obsolete single-app VD sender remains reachable"
 fi
 grep -Fq 'android:launchMode="singleTop"' "$MANIFEST" \

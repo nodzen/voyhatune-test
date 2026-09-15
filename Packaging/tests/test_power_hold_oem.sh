@@ -8,9 +8,9 @@ HUB="$REPO_ROOT/Native/app/src/main/java/ru/big/town/anative/CanBusEventHub.java
 POLICY="$REPO_ROOT/Native/app/src/main/java/ru/big/town/anative/PowerHoldPolicy.java"
 CONTROLLER="$REPO_ROOT/Native/app/src/main/java/ru/big/town/anative/PowerHoldController.java"
 SERVICE="$REPO_ROOT/Native/app/src/main/java/ru/big/town/anative/SetModesService.java"
-NATIVE_MAIN="$REPO_ROOT/Native/app/src/main/java/ru/big/town/anative/MainActivity.java"
-RESTORE_MAIN="$REPO_ROOT/RestoreMode/app/src/main/java/ru/big/town/restoremode/MainActivity.java"
-RESTORE_LAYOUT="$REPO_ROOT/RestoreMode/app/src/main/res/layout-land/activity_main.xml"
+NATIVE_FACADE="$REPO_ROOT/Native/app/src/main/java/ru/big/town/anative/VehicleCommandFacade.java"
+QUICK_ACTIONS="$REPO_ROOT/RestoreMode/app/src/main/java/ru/big/town/restoremode/QuickActionsController.java"
+QUICK_LAYOUT="$REPO_ROOT/RestoreMode/app/src/main/res/layout/page_quick_actions.xml"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 require_fixed() { grep -Fq -- "$2" "$1" || fail "missing '$2' in $1"; }
@@ -79,10 +79,10 @@ require_fixed "$POLICY" 'static final int PERMANENT_DURATION = 15;'
 require_fixed "$CONTROLLER" 'Gear gear = session.readGear();'
 require_fixed "$CONTROLLER" 'Integer soc = session.readSoc();'
 require_fixed "$CONTROLLER" 'return oemSession.sendBundle(keyed, label).accepted();'
-forbid_fixed "$NATIVE_MAIN" 'LEAVE_CAR_FRAMES'
-forbid_fixed "$NATIVE_MAIN" 'sendLeaveCarCommand'
-forbid_fixed "$NATIVE_MAIN" '6c 08 00 3e 64 21 c7 00 00 00'
-forbid_fixed "$NATIVE_MAIN" '77 08 00 00 00 00 00 1f 00 00'
+forbid_fixed "$NATIVE_FACADE" 'LEAVE_CAR_FRAMES'
+forbid_fixed "$NATIVE_FACADE" 'sendLeaveCarCommand'
+forbid_fixed "$NATIVE_FACADE" '6c 08 00 3e 64 21 c7 00 00 00'
+forbid_fixed "$NATIVE_FACADE" '77 08 00 00 00 00 00 1f 00 00'
 forbid_fixed "$SERVICE" 'requestPowerHoldCleanup'
 forbid_fixed "$SERVICE" 'restorePowerHold'
 
@@ -94,10 +94,10 @@ require_fixed "$SERVICE" 'tracker.beginActivation(requestGeneration -> {'
 require_fixed "$SERVICE" 'tracker.finishActivation('
 require_fixed "$SERVICE" 'update.setPackage(RESTOREMODE_PKG);'
 require_fixed "$SERVICE" 'sendBroadcast(update, BIND_PERMISSION);'
-require_fixed "$RESTORE_MAIN" 'new IntentFilter(ACTION_POWER_HOLD_STATUS_UPDATE)'
-require_fixed "$RESTORE_MAIN" 'sendBroadcast(powerHoldRequest, BIND_SET_MODES_PERMISSION);'
-require_fixed "$RESTORE_MAIN" 'case POWER_HOLD_ACTIVE:'
-require_fixed "$RESTORE_LAYOUT" 'android:id="@+id/powerHoldBadge"'
+require_fixed "$QUICK_ACTIONS" 'new IntentFilter(QuickActionsContract.POWER_HOLD_UPDATE)'
+require_fixed "$QUICK_ACTIONS" 'QuickActionsContract.NATIVE_PERMISSION);'
+require_fixed "$QUICK_ACTIONS" 'case 3: return "активен";'
+require_fixed "$QUICK_LAYOUT" 'android:id="@+id/quickPowerHold"'
 
 # All four locally decompiled VehicleSettings variants expose the same H97C contract. Keep this
 # comparison executable so a later firmware fixture cannot silently drift from the implementation.

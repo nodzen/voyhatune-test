@@ -72,7 +72,7 @@ public class WiperColdService extends Service {
     // Наша оценка текущего состояния сервисного режима (персист — переживает рестарт процесса)
     private static final String PREFS_NAME          = "NativePrefs";
     private static final String PREF_SERVICE_ACTIVE = "wiperServiceActive";
-    // Флаги-потребители сигнала двери (пишет MainActivity.applyDoorReactor). Сервис может быть запущен
+    // Флаги-потребители сигнала двери (пишет VehicleCommandFacade.applyDoorReactor). Сервис может быть запущен
     // ради любого из них, поэтому каждое действие гейтим своим флагом.
     private static final String PREF_WIPER_ENABLED  = "wiperCold";
     private static final String PREF_MEDIA_PAUSE    = "pauseMediaOnDoor";
@@ -266,7 +266,7 @@ public class WiperColdService extends Service {
         if (isServiceActive() == targetActive) return;
         wiperTogglePending = true;
         ApplyEngine.postWakeAction(label, () -> {
-            byte[] frame = MainActivity.parseHexBinary(WIPER_TOGGLE_FRAME);
+            byte[] frame = CanFrameCodec.parse(WIPER_TOGGLE_FRAME);
             Log.i(TAG, "sendToggle: [" + label + "] frame=" + WIPER_TOGGLE_FRAME
                     + " debugMode=" + CanSender.isDebugMode());
             return CanSender.send(CAN_CMD_NUM, frame, label);
@@ -556,16 +556,12 @@ public class WiperColdService extends Service {
             }
 
             AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
-            boolean musicActive = false;
-            try {
-                musicActive = am != null && am.isMusicActive();
-            } catch (Exception e) {
-                Log.w(TAG, "resumeDoorMedia: isMusicActive: " + e.getMessage());
-            }
-            if (musicActive) {
-                // A user or another component may have started playback while the door was open.
-                // PLAY_PAUSE would stop it, so consider the door pause already resolved.
-                Log.i(TAG, "resumeDoorMedia: music already active, toggle suppressed");
+            if (MediaControlRouter.isPinnedTargetReactivated(this)) {
+                // AudioManager.isMusicActive() is deliberately not used here. On this head unit it
+                // remains true during the Bluetooth drain window even after our pause, which used
+                // to suppress the only resume command. The router tracks a real inactive->active
+                // edge for the pinned target, so a genuine user restart is still not toggled off.
+                Log.i(TAG, "resumeDoorMedia: pinned target was reactivated, toggle suppressed");
                 mediaPausedByDoor = false;
                 mediaPauseWorkGate.release(workGeneration);
                 return;
@@ -595,10 +591,25 @@ public class WiperColdService extends Service {
         Log.i(TAG, "dispatchDoorPause: route=" + result.route + " key=" + result.keyCode
                 + " pkg=" + result.packageName + " stateClass=" + result.playbackClass);
 
-        if (MediaControlRouter.ROUTE_DIRECT.equals(result.route)
-                || MediaControlRouter.ROUTE_NOOP.equals(result.route)) {
-            return MediaControlRouter.ROUTE_DIRECT.equals(result.route)
-                    && result.playbackClass == MediaControlPolicy.STATE_ACTIVE;
+        if (MediaControlRouter.ROUTE_DIRECT.equals(result.route)) {
+            return result.playbackClass == MediaControlPolicy.STATE_ACTIVE;
+        }
+        if (MediaControlRouter.ROUTE_NOOP.equals(result.route)) {
+            // The OEM com.qinggan.media session can report PAUSED while the actual Bluetooth
+            // stream is still audible. Router policy correctly avoids a blind toggle in that state,
+            // but AudioManager gives us enough evidence to use the same single PLAY_PAUSE path as
+            // the physical wheel button. There is no command in ROUTE_NOOP, so this is not a double
+            // dispatch.
+            boolean musicActive = false;
+            try { musicActive = am != null && am.isMusicActive(); }
+            catch (Exception e) { Log.w(TAG, "dispatchDoorPause: isMusicActive: " + e.getMessage()); }
+            if (!musicActive) return false;
+            boolean nativeQinggan = result.packageName.isEmpty()
+                    || MediaControlPolicy.isNativeQingganPackage(result.packageName);
+            Log.i(TAG, "dispatchDoorPause: noop session but active audio, using PLAY_PAUSE path"
+                    + " nativeQG=" + nativeQinggan);
+            sendMediaProxy(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, nativeQinggan, am, workGeneration);
+            return true;
         }
 
         boolean musicActive = false;

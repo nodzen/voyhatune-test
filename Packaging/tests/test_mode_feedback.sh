@@ -11,7 +11,7 @@ LIGHT="$REPO_ROOT/Native/app/src/main/java/ru/big/town/anative/LightSensorServic
 TRIPS="$REPO_ROOT/Native/app/src/main/java/ru/big/town/anative/TripStatsService.java"
 MODE_POLICY="$REPO_ROOT/Native/app/src/main/java/ru/big/town/anative/ModeSyncPolicy.java"
 APPLY_ENGINE="$REPO_ROOT/Native/app/src/main/java/ru/big/town/anative/ApplyEngine.java"
-NATIVE_MAIN="$REPO_ROOT/Native/app/src/main/java/ru/big/town/anative/MainActivity.java"
+NATIVE_FACADE="$REPO_ROOT/Native/app/src/main/java/ru/big/town/anative/VehicleCommandFacade.java"
 ADVANCE="$REPO_ROOT/RestoreMode/app/src/main/java/ru/big/town/restoremode/AdvanceActivity.java"
 PROVIDER="$REPO_ROOT/RestoreMode/app/src/main/java/ru/big/town/restoremode/RestoreModeContentProvider.java"
 ADVANCE_LAYOUT="$REPO_ROOT/RestoreMode/app/src/main/res/layout/activity_advance.xml"
@@ -68,16 +68,16 @@ require_fixed "$PROVIDER" '"driveRememberLast",        // 31'
 require_fixed "$PROVIDER" '"headlightsOffInParking",  // 35'
 require_fixed "$ADVANCE" 'putExtra(EXTRA_MODE_KEY, modeKey)'
 require_fixed "$ADVANCE" 'prefs.contains("rememberModes")'
-require_fixed "$NATIVE_MAIN" 'p.getBoolean("cacheRememberModes", true)'
-require_fixed "$NATIVE_MAIN" 'cursor.getColumnIndex("driveRememberLast")'
-require_fixed "$NATIVE_MAIN" 'cursor.getColumnIndex("headlightsOffInParking")'
-require_fixed "$NATIVE_MAIN" 'isRememberModeEnabled(modeKey)'
+require_fixed "$NATIVE_FACADE" 'p.getBoolean("cacheRememberModes", true)'
+require_fixed "$NATIVE_FACADE" 'cursor.getColumnIndex("driveRememberLast")'
+require_fixed "$NATIVE_FACADE" 'cursor.getColumnIndex("headlightsOffInParking")'
+require_fixed "$NATIVE_FACADE" 'isRememberModeEnabled(modeKey)'
 require_fixed "$LIGHT" 'ACTION_PARKING_HEADLIGHTS_CHANGED'
 require_fixed "$LIGHT" 'gear=P; parking headlight switch'
 require_fixed "$SERVICE" 'stopLightSensorServiceIfUnused()'
-require_fixed "$CONTROLLER" 'MainActivity.updateRememberLastMode(appContext, modeKey, rememberLast)'
-require_fixed "$CONTROLLER" 'MainActivity.updateRememberModes(appContext, rememberModes)'
-require_fixed "$NATIVE_MAIN" 'cursor.getColumnCount() <= column || cursor.isNull(column)'
+require_fixed "$CONTROLLER" 'VehicleCommandFacade.updateRememberLastMode(appContext, modeKey, rememberLast)'
+require_fixed "$CONTROLLER" 'VehicleCommandFacade.updateRememberModes(appContext, rememberModes)'
+require_fixed "$NATIVE_FACADE" 'cursor.getColumnCount() <= column || cursor.isNull(column)'
 require_fixed "$ADVANCE" 'ru.big.town.anative.MODE_REMEMBER_CHANGED'
 
 echo "PASS: vehicle-mode feedback is isolated, wake-safe, independently remembered, and parking headlights are wired"

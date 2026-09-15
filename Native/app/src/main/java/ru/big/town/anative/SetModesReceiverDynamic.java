@@ -558,7 +558,7 @@ public class SetModesReceiverDynamic extends BroadcastReceiver {
             return;
         }
         ApplyEngine.postUserCommand("steer custom CAN", () -> {
-            boolean sent = MainActivity.setCanValues(1, new byte[][] {frame}, "steering custom CAN");
+            boolean sent = VehicleCommandFacade.setCanValues(1, new byte[][] {frame}, "steering custom CAN");
             Log.i(TAG, "STEER_ACTION custom CAN: " + (sent ? "sent" : "failed"));
         }, completion);
     }
@@ -628,19 +628,19 @@ public class SetModesReceiverDynamic extends BroadcastReceiver {
         // Пользовательский выбор должен идти ПОСЛЕ уже запущенного wake-restore, а не параллельно с ним:
         // иначе restore успевал отправить старый snapshot поверх только что выбранного режима.
         ApplyEngine.postUserCommand("steer " + modeKey, () -> {
-            String cur = MainActivity.currentSavedMode(app, modeKey);
+            String cur = VehicleCommandFacade.currentSavedMode(app, modeKey);
             String next = SteeringActionPolicy.nextMode(csv, cur);
             if (next == null) return;
             boolean sent = "driveMode".equals(modeKey)
-                    ? MainActivity.sendDriveModeCommand(app, next)
+                    ? VehicleCommandFacade.sendDriveModeCommand(app, next)
                     : "energy".equals(modeKey)
-                            ? MainActivity.sendEnergyModeCommand(app, next)
-                            : MainActivity.sendRecuperationModeCommand(app, next);
+                            ? VehicleCommandFacade.sendEnergyModeCommand(app, next)
+                            : VehicleCommandFacade.sendRecuperationModeCommand(app, next);
             if (!sent) {
                 Log.w(TAG, "STEER_ACTION " + modeKey + ": CAN failed, selection not persisted");
                 return;
             }
-            MainActivity.persistSavedMode(app, modeKey, next);
+            VehicleCommandFacade.persistSavedMode(app, modeKey, next);
             Log.i(TAG, "STEER_ACTION " + modeKey + ": набор=" + csv
                     + " тек=" + cur + " → " + next);
         }, completion);
@@ -650,14 +650,14 @@ public class SetModesReceiverDynamic extends BroadcastReceiver {
     private static void toggleSetting(Context ctx, String key, Runnable completion) {
         final Context app = ctx.getApplicationContext();
         ApplyEngine.postUserCommand("steer " + key, () -> {
-            boolean current = MainActivity.currentSavedToggle(app, key);
+            boolean current = VehicleCommandFacade.currentSavedToggle(app, key);
             boolean next = !current;
             boolean sent;
             if ("forcedEv".equals(key)) {
-                sent = MainActivity.sendForcedEvCommand(next);
+                sent = VehicleCommandFacade.sendForcedEvCommand(next);
             } else if ("disablePedestrianSound".equals(key)) {
                 // В pref хранится инвертированная семантика: true = звук выключен.
-                sent = MainActivity.sendPedestrianSoundCommand(next);
+                sent = VehicleCommandFacade.sendPedestrianSoundCommand(next);
             } else {
                 return;
             }
@@ -665,7 +665,7 @@ public class SetModesReceiverDynamic extends BroadcastReceiver {
                 Log.w(TAG, "STEER_ACTION " + key + ": CAN failed, toggle not persisted");
                 return;
             }
-            MainActivity.persistSavedToggle(app, key, next);
+            VehicleCommandFacade.persistSavedToggle(app, key, next);
             Log.i(TAG, "STEER_ACTION " + key + ": " + current + " → " + next);
         }, completion);
     }
@@ -681,7 +681,7 @@ public class SetModesReceiverDynamic extends BroadcastReceiver {
             boolean current = prefs.getBoolean("steerHeadlightsOn", false);
             boolean next = !current;
             boolean previousManualAuto = LightSensorService.setManualAutoOverride(false);
-            if (!MainActivity.setHeadlights(app, next)) {
+            if (!VehicleCommandFacade.setHeadlights(app, next)) {
                 LightSensorService.setManualAutoOverride(previousManualAuto);
                 Log.w(TAG, "STEER_ACTION headlights: CAN failed, state not persisted");
                 return;
@@ -706,7 +706,7 @@ public class SetModesReceiverDynamic extends BroadcastReceiver {
             boolean nextLowBeam = !currentLowBeam;
             boolean previousManualAuto =
                     LightSensorService.setManualAutoOverride(!nextLowBeam);
-            if (!MainActivity.setHeadlightsAutoLow(app, nextLowBeam)) {
+            if (!VehicleCommandFacade.setHeadlightsAutoLow(app, nextLowBeam)) {
                 LightSensorService.setManualAutoOverride(previousManualAuto);
                 Log.w(TAG, "STEER_ACTION headlights auto/low: CAN failed, state not persisted");
                 return;

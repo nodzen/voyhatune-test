@@ -32,7 +32,9 @@ import java.util.concurrent.RejectedExecutionException;
  */
 final class SplitHostTaskLane {
     private static final String TAG = "$$$ SplitHostTasks $$$";
-    private static final int TASK_QUERY_LIMIT = 100;
+    // Launch teardown is already off the UI thread. Keep the old broad query: an app opened
+    // earlier can be below the first hundred tasks after several MULTIPLE_TASK launches.
+    private static final int TASK_QUERY_LIMIT = 1000;
     private static final long WATCH_SETTING_CACHE_MS = 30_000L;
     private static volatile SplitHostTaskLane instance;
 
@@ -85,14 +87,21 @@ final class SplitHostTaskLane {
         final long hostGeneration;
         final long supervisionGeneration;
         final List<PaneTicket> panes;
+        final boolean immediate;
 
         SupervisionRequest(long sequence, SplitHostActivity owner, long hostGeneration,
                            long supervisionGeneration, List<PaneTicket> panes) {
+            this(sequence, owner, hostGeneration, supervisionGeneration, panes, false);
+        }
+
+        SupervisionRequest(long sequence, SplitHostActivity owner, long hostGeneration,
+                           long supervisionGeneration, List<PaneTicket> panes, boolean immediate) {
             this.sequence = sequence;
             this.owner = new WeakReference<>(owner);
             this.hostGeneration = hostGeneration;
             this.supervisionGeneration = supervisionGeneration;
             this.panes = Collections.unmodifiableList(new ArrayList<>(panes));
+            this.immediate = immediate;
         }
     }
 
@@ -238,7 +247,9 @@ final class SplitHostTaskLane {
             }
             try {
                 if (request != null && isCurrentSupervisionHost(request)) {
-                    boolean enabled = readWatchEnabled();
+                    // The setting controls periodic background recovery. A visible user retry must
+                    // still reconcile an empty pane even when that watchdog has been disabled.
+                    boolean enabled = request.immediate || readWatchEnabled();
                     if (!isCurrentSupervisionHost(request)) return;
                     SplitHostTaskSnapshot snapshot = enabled
                             ? queryTasks().snapshot : SplitHostTaskSnapshot.unknown();
@@ -312,11 +323,23 @@ final class SplitHostTaskLane {
 
     void requestSupervision(SplitHostActivity owner, long hostGeneration,
                             long supervisionGeneration, List<PaneTicket> panes) {
+        requestSupervision(owner, hostGeneration, supervisionGeneration, panes, false);
+    }
+
+    /** One-shot foreground reconciliation used when the same split preset is opened again. */
+    void requestPaneHealthCheck(SplitHostActivity owner, long hostGeneration,
+                                long supervisionGeneration, List<PaneTicket> panes) {
+        requestSupervision(owner, hostGeneration, supervisionGeneration, panes, true);
+    }
+
+    private void requestSupervision(SplitHostActivity owner, long hostGeneration,
+                                    long supervisionGeneration, List<PaneTicket> panes,
+                                    boolean immediate) {
         if (panes == null || panes.isEmpty()) return;
         synchronized (lock) {
             long sequence = ++nextSequence;
             boolean postDrain = supervisionWork.offer(0, new SupervisionRequest(sequence, owner,
-                    hostGeneration, supervisionGeneration, panes));
+                    hostGeneration, supervisionGeneration, panes, immediate));
             latestSupervisionHost = hostGeneration;
             if (postDrain && !worker.post(supervisionDrain)) {
                 supervisionWork.rejectDrainPost();
@@ -434,10 +457,12 @@ final class SplitHostTaskLane {
             if (running == null) return new TaskQuery(SplitHostTaskSnapshot.unknown());
             List<SplitHostTaskSnapshot.TaskRecord> normalized = new ArrayList<>(running.size());
             for (ActivityManager.RunningTaskInfo task : running) {
-                ComponentName component = task.topActivity != null ? task.topActivity : task.baseActivity;
-                String packageName = component != null ? component.getPackageName() : null;
+                ComponentName top = task.topActivity;
+                ComponentName base = task.baseActivity;
+                String topPackageName = top != null ? top.getPackageName() : null;
+                String basePackageName = base != null ? base.getPackageName() : null;
                 normalized.add(new SplitHostTaskSnapshot.TaskRecord(
-                        task.taskId, packageName, readDisplayId(task)));
+                        task.taskId, topPackageName, basePackageName, readDisplayId(task)));
             }
             return new TaskQuery(SplitHostTaskSnapshot.known(normalized));
         } catch (Throwable t) {
@@ -473,14 +498,14 @@ final class SplitHostTaskLane {
             // This synchronized latest-check is the destructive operation's linearization point.
             // A successor offered afterwards stays serialized behind this worker; it never races
             // concurrently, although this one already-claimed removeTask may still finish first.
-            if (!packages.contains(task.packageName)
-                    || !hasCurrentRequestForPackage(batch, task.packageName)) continue;
+            String matchedPackage = matchingCurrentPackage(task, packages, batch);
+            if (matchedPackage == null) continue;
             try {
                 removeTaskMethod.invoke(activityTaskManager, task.taskId);
                 removed++;
             } catch (Throwable t) {
                 invocationFailed = true;
-                Log.w(TAG, "removeTask " + task.taskId + " (" + task.packageName + "): "
+                Log.w(TAG, "removeTask " + task.taskId + " (" + matchedPackage + "): "
                         + rootCause(t));
             }
         }
@@ -498,6 +523,17 @@ final class SplitHostTaskLane {
                     && isLatestPane(request)) return true;
         }
         return false;
+    }
+
+    private String matchingCurrentPackage(SplitHostTaskSnapshot.TaskRecord task,
+                                          Set<String> packages, PaneLaunchRequest[] batch) {
+        if (task == null) return null;
+        for (String packageName : packages) {
+            if (task.belongsTo(packageName) && hasCurrentRequestForPackage(batch, packageName)) {
+                return packageName;
+            }
+        }
+        return null;
     }
 
     private boolean ensureRemoveTask() {

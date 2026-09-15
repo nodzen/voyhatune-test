@@ -12,8 +12,8 @@ android {
         applicationId = "ru.big.town.restoremode"
         minSdk = 30
         targetSdk = 36
-        versionCode = 30807
-        versionName = "3.8.7"
+        versionCode = 30900
+        versionName = "3.9.0-rc1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         multiDexEnabled = true

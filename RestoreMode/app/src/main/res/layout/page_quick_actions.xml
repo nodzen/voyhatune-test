@@ -1,0 +1,231 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingHorizontal="28dp"
+    android:paddingVertical="20dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Оперативные функции"
+        android:textColor="#FFFFFF"
+        android:textSize="28sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="Команды, которые могут понадобиться в поездке. Остальные параметры находятся в разделах слева."
+        android:textColor="#9AA0AA"
+        android:textSize="18sp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="18dp"
+        android:background="@drawable/layout_category_bg"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:padding="16dp">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Текущая поездка"
+                android:textColor="#FFFFFF"
+                android:textSize="22sp" />
+
+            <TextView
+                android:id="@+id/quickTripTimer"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:text="0:00:00"
+                android:textColor="#FFFFFF"
+                android:textSize="32sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/quickTripStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="нет активной поездки"
+                android:textColor="#9AA0AA"
+                android:textSize="16sp" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/quickTripHistory"
+            android:layout_width="wrap_content"
+            android:layout_height="58dp"
+            android:layout_marginEnd="8dp"
+            android:backgroundTint="#373f4a"
+            android:text="История"
+            android:textColor="#FFFFFF"
+            app:cornerRadius="16dp" />
+
+        <Button
+            android:id="@+id/quickTripReset"
+            android:layout_width="wrap_content"
+            android:layout_height="58dp"
+            android:backgroundTint="#373f4a"
+            android:text="Сброс"
+            android:textColor="#FFFFFF"
+            app:cornerRadius="16dp" />
+    </LinearLayout>
+
+    <GridLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:columnCount="3">
+
+        <Button
+            android:id="@+id/quickPowerHold"
+            android:layout_width="0dp"
+            android:layout_height="88dp"
+            android:layout_columnWeight="1"
+            android:layout_margin="5dp"
+            android:backgroundTint="#2f7fd0"
+            android:text="Power Hold"
+            android:textColor="#FFFFFF"
+            android:textSize="19sp"
+            app:cornerRadius="18dp" />
+
+        <Button
+            android:id="@+id/quickWashMode"
+            android:layout_width="0dp"
+            android:layout_height="88dp"
+            android:layout_columnWeight="1"
+            android:layout_margin="5dp"
+            android:backgroundTint="#373f4a"
+            android:text="Режим мойки"
+            android:textColor="#FFFFFF"
+            android:textSize="19sp"
+            app:cornerRadius="18dp" />
+
+        <Button
+            android:id="@+id/quickBatteryHeat"
+            android:layout_width="0dp"
+            android:layout_height="88dp"
+            android:layout_columnWeight="1"
+            android:layout_margin="5dp"
+            android:backgroundTint="#373f4a"
+            android:text="Прогрев батареи"
+            android:textColor="#FFFFFF"
+            android:textSize="19sp"
+            app:cornerRadius="18dp" />
+    </GridLayout>
+
+    <TextView
+        android:id="@+id/quickVehicleStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:background="@drawable/layout_category_bg"
+        android:padding="14dp"
+        android:text="Power Hold: состояние неизвестно\nПрогрев батареи: нет данных"
+        android:textColor="#B8BEC8"
+        android:textSize="17sp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="22dp"
+        android:text="Приложения и разделение экрана"
+        android:textColor="#FFFFFF"
+        android:textSize="24sp"
+        android:textStyle="bold" />
+
+    <Button
+        android:id="@+id/quickAddAppShortcut"
+        android:layout_width="wrap_content"
+        android:layout_height="58dp"
+        android:layout_marginTop="8dp"
+        android:backgroundTint="#373f4a"
+        android:onClick="onAddAppShortcut"
+        android:text="＋ Добавить приложение"
+        android:textColor="#FFFFFF"
+        android:textSize="18sp"
+        app:cornerRadius="16dp" />
+
+    <GridLayout
+        android:id="@+id/quickLaunchGrid"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:columnCount="4"
+        android:paddingTop="8dp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="22dp"
+        android:background="@drawable/layout_category_bg"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Медиа-интеграция"
+            android:textColor="#FFFFFF"
+            android:textSize="24sp"
+            android:textStyle="bold" />
+
+        <Switch
+            android:id="@+id/switchHomeThirdPartyMedia"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="Spotify, Яндекс.Музыка и другие MediaSession"
+            android:textColor="#FFFFFF"
+            android:textSize="19sp" />
+
+        <Switch
+            android:id="@+id/switchShowInstrumentNowPlaying"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Показывать музыку на приборке"
+            android:textColor="#FFFFFF"
+            android:textSize="19sp" />
+
+        <Switch
+            android:id="@+id/switchSaveTripHistory"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Сохранять историю поездок"
+            android:textColor="#FFFFFF"
+            android:textSize="19sp" />
+
+        <Button
+            android:id="@+id/buttonChooseMediaSource"
+            android:layout_width="match_parent"
+            android:layout_height="60dp"
+            android:layout_marginTop="8dp"
+            android:backgroundTint="#373f4a"
+            android:text="Выбрать источник музыки"
+            android:textColor="#FFFFFF"
+            app:cornerRadius="16dp" />
+
+        <Button
+            android:id="@+id/buttonConfigureHomeWidgets"
+            android:layout_width="match_parent"
+            android:layout_height="60dp"
+            android:layout_marginTop="8dp"
+            android:backgroundTint="#373f4a"
+            android:text="Настроить штатные виджеты"
+            android:textColor="#FFFFFF"
+            app:cornerRadius="16dp" />
+    </LinearLayout>
+
+</LinearLayout>

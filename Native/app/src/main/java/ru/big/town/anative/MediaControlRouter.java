@@ -152,6 +152,49 @@ final class MediaControlRouter {
         }
     }
 
+    /** Releases an explicit third-party source pin when the OEM picker selects BT/DAB/USB. */
+    static void releaseSourcePin() {
+        synchronized (TARGET_LOCK) {
+            if (stickyToken == null && !stickyPinned) return;
+            stickyToken = null;
+            stickyPinned = false;
+            targetRevision++;
+        }
+    }
+
+    /**
+     * Returns true only when the target which our last PAUSE/PLAY_PAUSE command pinned was later
+     * observed entering an active state. AudioManager.isMusicActive() cannot provide this answer on
+     * the head unit: Bluetooth keeps the stream active for a short time after a pause and sometimes
+     * leaves it active while the OEM MediaSession is already paused.
+     */
+    static boolean isPinnedTargetReactivated(Context context) {
+        final MediaSession.Token token;
+        synchronized (TARGET_LOCK) {
+            // stickyPinned=false is the signal produced by notePlaying() for a genuine new active
+            // edge. A stale PLAYING state never changes this flag by itself.
+            if (stickyToken == null || stickyPinned) return false;
+            token = stickyToken;
+        }
+        if (context == null) return false;
+        try {
+            MediaSessionManager msm = (MediaSessionManager) context.getSystemService(
+                    Context.MEDIA_SESSION_SERVICE);
+            if (msm == null) return false;
+            List<MediaController> controllers = msm.getActiveSessions(null);
+            if (controllers == null) return false;
+            for (MediaController controller : controllers) {
+                if (sameToken(controller.getSessionToken(), token)
+                        && isActiveState(safePlaybackState(controller))) return true;
+            }
+        } catch (SecurityException e) {
+            Log.w(TAG, "isPinnedTargetReactivated: no MEDIA_CONTENT_CONTROL: " + e.getMessage());
+        } catch (Throwable e) {
+            Log.w(TAG, "isPinnedTargetReactivated: " + e.getMessage());
+        }
+        return false;
+    }
+
     static void activateObserverGeneration(long generation) {
         if (generation <= 0L) return;
         synchronized (TARGET_LOCK) {

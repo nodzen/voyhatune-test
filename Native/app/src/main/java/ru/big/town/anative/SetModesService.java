@@ -172,14 +172,14 @@ public class SetModesService extends Service {
                     Log.i(TAG, "handleMessage() MSG_APPLY_PEDESTRIAN arg1=" + msg.arg1);
                     final boolean pedestrianDisabled = msg.arg1 == 1;
                     ApplyEngine.postUserCommand("pedestrian sound",
-                            () -> MainActivity.sendPedestrianSoundCommand(pedestrianDisabled));
+                            () -> VehicleCommandFacade.sendPedestrianSoundCommand(pedestrianDisabled));
                     break;
 
                 case MSG_APPLY_FORCED_EV:
                     Log.i(TAG, "handleMessage() MSG_APPLY_FORCED_EV arg1=" + msg.arg1);
                     final boolean forcedEvEnabled = msg.arg1 == 1;
                     ApplyEngine.postUserCommand("forced EV",
-                            () -> MainActivity.sendForcedEvCommand(forcedEvEnabled));
+                            () -> VehicleCommandFacade.sendForcedEvCommand(forcedEvEnabled));
                     break;
 
                 case MSG_REBOOT:
@@ -466,6 +466,7 @@ public class SetModesService extends Service {
             i.putExtra(SplitHostActivity.EXTRA_SPLIT, split);
             i.putExtra(SplitHostActivity.EXTRA_PRESET_IDX, presetIdx);
             i.putExtra(SplitHostActivity.EXTRA_PRESET_ID, presetId);
+            i.putExtra(SplitHostActivity.EXTRA_RECONCILE, true);
             DockLaunchGuard.arm(this, 0, "ru.big.town.anative");
             startActivity(i);
             LastSessionStore.recordSplit(this, leftPkg, rightPkg, ratio, leftDpi, rightDpi,
@@ -1283,6 +1284,16 @@ public class SetModesService extends Service {
             restoreWiperColdState();
             startTripStatsService();
             startBatteryHeatService();
+            // NowPlayingService owns the provider snapshot consumed by the injected OEM media
+            // surfaces.  Do not wait for the physical wake retry here: after a cold boot there may
+            // be no wake edge at all, leaving the instrument cluster stuck on DAB/NO until the
+            // service is started manually.
+            try {
+                startNowPlayingService();
+                Log.i(TAG, "onStartCommand(): NowPlayingService start requested");
+            } catch (Exception e) {
+                Log.w(TAG, "onStartCommand(): NowPlayingService start failed: " + e.getMessage());
+            }
             scheduleAncillaryWakeTasks();
             Log.i(TAG, "onStartCommand(): startup initialized");
         } else {
@@ -1378,10 +1389,10 @@ public class SetModesService extends Service {
         if (GlobalVars.SAVE_CONTEXT == null || mode != MSG_APPLY_DRIVE_MODES_STAR_BUTTON) return;
 
         ApplyEngine.postUserCommand("star button " + msg_arg1, () -> {
-            MainActivity.loadModes(GlobalVars.SAVE_CONTEXT);
+            VehicleCommandFacade.loadModes(GlobalVars.SAVE_CONTEXT);
             Log.i(TAG, " Run customCommandStarButton");
-            if (msg_arg1 == 1) MainActivity.setCanValues(1, MainActivity.getCustomCommandStarButton1(), "star button command 1");
-            if (msg_arg1 == 2) MainActivity.setCanValues(1, MainActivity.getCustomCommandStarButton2(), "star button command 2");
+            if (msg_arg1 == 1) VehicleCommandFacade.setCanValues(1, VehicleCommandFacade.getCustomCommandStarButton1(), "star button command 1");
+            if (msg_arg1 == 2) VehicleCommandFacade.setCanValues(1, VehicleCommandFacade.getCustomCommandStarButton2(), "star button command 2");
         });
     }
 }

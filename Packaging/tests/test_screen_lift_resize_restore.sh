@@ -3,14 +3,17 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 HOST="$ROOT/Native/app/src/main/java/ru/big/town/anative/SplitHostActivity.java"
+LANE="$ROOT/Native/app/src/main/java/ru/big/town/anative/SplitHostTaskLane.java"
+SNAPSHOT="$ROOT/Native/app/src/main/java/ru/big/town/anative/SplitHostTaskSnapshot.java"
 RESTORER="$ROOT/Native/app/src/main/java/ru/big/town/anative/ScreenLiftTaskRestorer.java"
 SERVICE="$ROOT/Native/app/src/main/java/ru/big/town/anative/SetModesService.java"
 MANIFEST="$ROOT/Native/app/src/main/AndroidManifest.xml"
 VD="$ROOT/Packaging/inject/vd_bypass.js"
 DOCK="$ROOT/Packaging/inject/launcherdock.js"
+INSTRUMENT="$ROOT/Packaging/inject/instrumentcard.js"
 SPLIT_STORE="$ROOT/RestoreMode/app/src/main/java/ru/big/town/restoremode/SplitStore.java"
 SPLIT_SYNC="$ROOT/RestoreMode/app/src/main/java/ru/big/town/restoremode/SplitConfigSync.java"
-SPLIT_MAIN="$ROOT/RestoreMode/app/src/main/java/ru/big/town/restoremode/MainActivity.java"
+QUICK_ACTIONS="$ROOT/RestoreMode/app/src/main/java/ru/big/town/restoremode/QuickActionsController.java"
 SPLIT_SAVE="$ROOT/RestoreMode/app/src/main/java/ru/big/town/restoremode/SplitRatioSaveReceiver.java"
 ADVANCE="$ROOT/RestoreMode/app/src/main/java/ru/big/town/restoremode/AdvanceActivity.java"
 
@@ -25,6 +28,7 @@ require_fixed() {
 
 node --check "$VD"
 node --check "$DOCK"
+node --check "$INSTRUMENT"
 
 # The provisional compact viewport is one shared contract across the VD host, physical WM frames
 # and the launcher dock. Keep 720 as the raised baseline until a head-unit measurement says otherwise.
@@ -46,12 +50,25 @@ require_fixed "$HOST" 'private static final String ACTION_VD_RESIZED = "ru.big.t
 require_fixed "$HOST" 'int actualType = readScreenLiftProperty(type);'
 require_fixed "$HOST" 'if (actualType != type) {'
 require_fixed "$HOST" 'applyScreenLiftSize(type);'
-require_fixed "$HOST" 'pane.vd.resize(width, height, effectiveDpi(pane));'
+require_fixed "$HOST" 'pane.vd.resize(targetWidth, targetHeight, targetDpi);'
+require_fixed "$HOST" 'schedulePaneResize(pane, width, height, dpi);'
+require_fixed "$HOST" 'if (applyIncomingIntentInPlace(intent)) return;'
+require_fixed "$HOST" 'private boolean applyIncomingIntentInPlace(Intent incoming)'
+require_fixed "$HOST" 'pane.launched = false;'
 require_fixed "$HOST" 'else if (sizeChanged) {'
 require_fixed "$HOST" 'notifyPaneResized(pane);'
 require_fixed "$HOST" 'intent.setPackage(pane.pkg);'
 require_fixed "$HOST" 'sendBroadcast(intent, VD_RESIZE_PERMISSION);'
 require_fixed "$HOST" 'unregisterReceiver(screenLiftReceiver);'
+require_fixed "$HOST" 'public static final String EXTRA_RECONCILE = "reconcilePanes";'
+require_fixed "$HOST" 'taskLane.requestPaneHealthCheck(this'
+require_fixed "$HOST" 'if (paneHealthCheckPending) requestPaneHealthCheck();'
+require_fixed "$LANE" 'boolean enabled = request.immediate || readWatchEnabled();'
+require_fixed "$HOST" 'maskRight.setTranslationX(dx);'
+require_fixed "$LANE" 'private static final int TASK_QUERY_LIMIT = 1000;'
+require_fixed "$LANE" 'task.topActivity'
+require_fixed "$LANE" 'task.baseActivity'
+require_fixed "$SNAPSHOT" 'boolean belongsTo(String packageName)'
 
 # Interactive resize is explicitly opt-out at two levels: a global safety switch and the per-preset
 # flag. Turning the global switch off must prevent every launch path from sending a resizable split,
@@ -60,8 +77,8 @@ require_fixed "$SPLIT_STORE" 'KEY_INTERACTIVE_DIVIDER_ENABLED = "splitInteractiv
 require_fixed "$SPLIT_STORE" 'preferences.getBoolean(KEY_INTERACTIVE_DIVIDER_ENABLED, true)'
 require_fixed "$ADVANCE" 'splitInteractiveDividerSwitch = findViewById(R.id.splitInteractiveDividerSwitch);'
 require_fixed "$ADVANCE" 'SplitStore.setInteractiveDividerEnabled(prefs, enabled);'
-require_fixed "$SPLIT_MAIN" 'preset.resizable'
-require_fixed "$SPLIT_MAIN" 'SplitStore.isInteractiveDividerEnabled(sharedPreferences)'
+require_fixed "$QUICK_ACTIONS" 'preset.resizable'
+require_fixed "$QUICK_ACTIONS" 'SplitStore.isInteractiveDividerEnabled(prefs)'
 require_fixed "$SPLIT_SYNC" 'SplitStore.isInteractiveDividerEnabled(prefs)'
 require_fixed "$SPLIT_SAVE" '!SplitStore.isInteractiveDividerEnabled(prefs)'
 
@@ -117,6 +134,10 @@ require_fixed "$DOCK" 'var navigationBar = runtimeObject(dockField(this, "mNavig
 require_fixed "$DOCK" "var launcherScreenLift = LM2.doScreenLift.overload('int');"
 require_fixed "$DOCK" 'setTimeout(updateAllNavbars, 50);'
 require_fixed "$DOCK" 'setTimeout(updateAllNavbars, 250);'
+require_fixed "$DOCK" 'function applyNativeMediaIdentity(view)'
+require_fixed "$DOCK" 'fieldValue(view, "mediaName")'
+require_fixed "$INSTRUMENT" 'function applyNativeMediaIdentity(view)'
+require_fixed "$INSTRUMENT" 'native media resource identity hook installed'
 require_fixed "$DOCK" 'return mainOnClick.call(this, view);'
 require_fixed "$DOCK" 'if (screenId !== 0) return "none";'
 if grep -Eq 'mScreenUp(AirView|SeatView)' "$DOCK"; then

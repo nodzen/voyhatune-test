@@ -14,7 +14,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
 import android.os.Messenger;
-import android.os.RemoteException;
+import android.provider.Settings;
 import android.text.Editable;
 import android.util.Log;
 import android.view.LayoutInflater;
@@ -38,6 +38,7 @@ import androidx.core.content.ContextCompat;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
+import com.google.android.material.snackbar.Snackbar;
 import android.text.TextWatcher;
 import android.widget.NumberPicker;
 
@@ -59,7 +60,7 @@ public class AdvanceActivity extends AppCompatActivity {
     // Кнопки удаления примеров (tag = нормализованный hex команды)
     private final List<ImageButton> deleteButtons = new ArrayList<>();
 
-    // Навигация: 0 главный экран, 1 настройки автомобиля (+комфорт), 2 приложения и разделение экрана,
+    // Навигация: 0 быстрые действия, 1 настройки автомобиля (+комфорт), 2 приложения и разделение экрана,
     //            3 Apollo Tech, 4 команды (видимость настраивается), 5 кнопки на руле, 6 другое
     private TextView navMainScreen, navCustomCommands, navDriveModes, navSplitScreen, navApolloTech,
             navSteeringButtons, navOther;
@@ -70,7 +71,7 @@ public class AdvanceActivity extends AppCompatActivity {
     // Освободившийся после переноса «Комфорта» индекс 3 занимает Apollo Tech. Индекс 4
     // (Собственные команды) показывается отдельной настройкой.
     private static final String[] SECTION_TITLES = {
-            "Главный экран", "Настройки автомобиля", "Приложения и разделение экрана", "Apollo Tech",
+            "Быстрые действия", "Настройки автомобиля", "Приложения и разделение экрана", "Apollo Tech",
             "Собственные команды", "Кнопки на руле", "Другое"
     };
     private static final String PREF_SHOW_CUSTOM_COMMANDS = "showCustomCommands";
@@ -98,12 +99,14 @@ public class AdvanceActivity extends AppCompatActivity {
 
     // DrivePreferences — единый источник настроек
     private SharedPreferences prefs;
+    private NativeServiceClient nativeService;
+    private QuickActionsController quickActions;
 
     // Автосвет (перенесён в «Комфорт»)
     private RadioGroup autoLightGroup;
     private TextView textSensorLevel;
 
-    // Сообщения в SetModesService (через GlobalVars.serviceMessenger, забинденный MainActivity)
+    // Сообщения в SetModesService через lifecycle-owned NativeServiceClient.
     static final int MSG_AUTO_LIGHT_ENABLE  = 10;
     static final int MSG_AUTO_LIGHT_DISABLE = 11;
     static final int MSG_APPLY_DRIVE_MODES  = 1;
@@ -305,6 +308,11 @@ public class AdvanceActivity extends AppCompatActivity {
         applyWindowInsets();
 
         prefs = getSharedPreferences("DrivePreferences", MODE_PRIVATE);
+        nativeService = new NativeServiceClient(this);
+        nativeService.connect();
+
+        View quickPage = findViewById(R.id.pageMainScreen);
+        quickActions = new QuickActionsController(this, quickPage, prefs, nativeService);
 
         buttonApplyAdvance   = findViewById(R.id.buttonApplyAdvance);
         applyProgressAdvance = findViewById(R.id.applyProgressAdvance);
@@ -327,16 +335,17 @@ public class AdvanceActivity extends AppCompatActivity {
         });
 
         Intent intent = getIntent();
-        if (intent != null) {
-            String customCommand    = intent.getStringExtra("customCommand");
-            int customCommandCount  = intent.getIntExtra("customCommandCount", 1);
-
-            canCommandsEditor.setText(customCommand);
-            pickerCustomCommandCount.setValue(customCommandCount);
-
-            Log.i("$$$ Advance Create $$$$", String.format(
-                    "%s %d", customCommand, customCommandCount));
-        }
+        boolean hasCommandExtras = intent != null && intent.hasExtra("customCommand");
+        String customCommand = hasCommandExtras
+                ? intent.getStringExtra("customCommand")
+                : prefs.getString("customCommand", "");
+        int customCommandCount = intent != null && intent.hasExtra("customCommandCount")
+                ? intent.getIntExtra("customCommandCount", 1)
+                : prefs.getInt("customCommandCount", 1);
+        canCommandsEditor.setText(customCommand == null ? "" : customCommand);
+        pickerCustomCommandCount.setValue(Math.max(1, Math.min(10, customCommandCount)));
+        Log.i("$$$ Advance Create $$$$", String.format(
+                "%s %d", customCommand, customCommandCount));
         TextView textWarn = findViewById(R.id.TextWarn);
         textWarn.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -464,16 +473,9 @@ public class AdvanceActivity extends AppCompatActivity {
             if (navSteeringButtons != null) navSteeringButtons.setVisibility(View.GONE);
         }
 
-        // Раздел «Главный экран»: тумблеры видимости карточек (по умолчанию все включены)
-        bindShowSwitch(R.id.switchShowTripTimer, "showTripTimer");
-        bindShowSwitch(R.id.switchShowPowerHold, "showPowerHold");
-        bindShowSwitch(R.id.switchShowWashMode,  "showWashMode");
-        bindShowSwitch(R.id.switchShowAutoLight, "showAutoLight");
-        bindShowSwitch(R.id.switchShowPedestrian, "showPedestrian");
-        bindShowSwitch(R.id.switchShowBatteryHeat, "showBatteryHeat");
-        bindShowSwitch(R.id.switchShowForcedEv,   "showForcedEv");
-        bindShowSwitch(R.id.switchShowNowPlaying, "showNowPlaying");
         initMediaAndHomeWidgetSettings();
+        findViewById(R.id.buttonChooseMediaSource).setOnClickListener(this::onChooseMediaSource);
+        findViewById(R.id.buttonConfigureHomeWidgets).setOnClickListener(this::onConfigureHomeWidgets);
 
         // Сохранение истории поездок (отдельно от таймера). Выкл → Native удалит журнал.
         Switch switchSaveHistory = findViewById(R.id.switchSaveTripHistory);
@@ -696,17 +698,14 @@ public class AdvanceActivity extends AppCompatActivity {
         if (applying) return;
         // ApplyEngine перечитывает команды через ContentProvider, поэтому сохраняем их до сообщения.
         if (!saveCustomCommands()) return;
-        if (!GlobalVars.isBound || GlobalVars.serviceMessenger == null) {
+        if (!nativeService.isConnected()) {
             Log.w("$$$ Advance apply $$$", "SetModesService не забинден");
             return;
         }
-        try {
-            Message msg = Message.obtain(null, MSG_APPLY_DRIVE_MODES);
-            msg.replyTo = applyClient;
-            GlobalVars.serviceMessenger.send(msg);
+        Message msg = Message.obtain(null, MSG_APPLY_DRIVE_MODES);
+        msg.replyTo = applyClient;
+        if (nativeService.send(msg)) {
             setApplying(true);
-        } catch (RemoteException e) {
-            e.printStackTrace();
         }
     }
 
@@ -718,14 +717,6 @@ public class AdvanceActivity extends AppCompatActivity {
         }
         uiHandler.removeCallbacks(applyTimeout);
         if (on) uiHandler.postDelayed(applyTimeout, 12000); // страховка, если MSG_RESULT не придёт
-    }
-
-    /** Тумблер видимости карточки на главном экране: пишет флаг в DrivePreferences (MainActivity читает в onResume). */
-    private void bindShowSwitch(int switchId, String key) {
-        Switch sw = findViewById(switchId);
-        if (sw == null) return;
-        sw.setChecked(prefs.getBoolean(key, true));
-        sw.setOnCheckedChangeListener((b, checked) -> prefs.edit().putBoolean(key, checked).apply());
     }
 
     private void initMediaAndHomeWidgetSettings() {
@@ -833,28 +824,20 @@ public class AdvanceActivity extends AppCompatActivity {
 
     /** Вкл/выкл плавающие кнопки Назад/Home — шлём в SetModesService (тот правит secure settings). */
     private void sendFloatingBack(boolean enable) {
-        if (!GlobalVars.isBound || GlobalVars.serviceMessenger == null) {
+        if (!nativeService.isConnected()) {
             Log.w("$$$ Advance floatBack $$$", "SetModesService не забинден");
             return;
         }
-        try {
-            GlobalVars.serviceMessenger.send(Message.obtain(null, MSG_FLOATING_BACK, enable ? 1 : 0, 0));
-        } catch (RemoteException e) {
-            e.printStackTrace();
-        }
+        nativeService.send(MSG_FLOATING_BACK, enable ? 1 : 0);
     }
 
     /** Тема оформления (0 авто, 1 светлая, 2 тёмная) → Native применит через secure-настройку + UiModeManager. */
     private void sendTheme(int mode) {
-        if (!GlobalVars.isBound || GlobalVars.serviceMessenger == null) {
+        if (!nativeService.isConnected()) {
             Log.w("$$$ Advance theme $$$", "SetModesService не забинден");
             return;
         }
-        try {
-            GlobalVars.serviceMessenger.send(Message.obtain(null, MSG_SET_THEME, mode, 0));
-        } catch (RemoteException e) {
-            e.printStackTrace();
-        }
+        nativeService.send(MSG_SET_THEME, mode);
     }
 
     /**
@@ -905,15 +888,11 @@ public class AdvanceActivity extends AppCompatActivity {
 
     /** Сторона плавающей кнопки (0 лево, 1 верх, 2 право). */
     private void sendFloatingBackSide(int side) {
-        if (!GlobalVars.isBound || GlobalVars.serviceMessenger == null) {
+        if (!nativeService.isConnected()) {
             Log.w("$$$ Advance floatBack $$$", "SetModesService не забинден");
             return;
         }
-        try {
-            GlobalVars.serviceMessenger.send(Message.obtain(null, MSG_FLOATING_BACK_SIDE, side, 0));
-        } catch (RemoteException e) {
-            e.printStackTrace();
-        }
+        nativeService.send(MSG_FLOATING_BACK_SIDE, side);
     }
 
     /** «Закрыть приложения»: сторонние приложения force-stop в Native (priv-app) → стартуют с нуля. */
@@ -923,14 +902,7 @@ public class AdvanceActivity extends AppCompatActivity {
                 .setMessage("Все открытые сторонние приложения будут полностью закрыты и при следующем запуске откроются с нуля. Системные приложения не затрагиваются. Продолжить?")
                 .setPositiveButton("Закрыть", (d, w) -> {
                     boolean ok = false;
-                    if (GlobalVars.isBound && GlobalVars.serviceMessenger != null) {
-                        try {
-                            GlobalVars.serviceMessenger.send(Message.obtain(null, MSG_CLOSE_ALL));
-                            ok = true;
-                        } catch (RemoteException e) {
-                            e.printStackTrace();
-                        }
-                    }
+                    if (nativeService.isConnected()) ok = nativeService.send(MSG_CLOSE_ALL);
                     com.google.android.material.snackbar.Snackbar.make(
                             findViewById(R.id.main),
                             ok ? "Приложения закрыты" : "Сервис не готов",
@@ -1174,6 +1146,7 @@ public class AdvanceActivity extends AppCompatActivity {
                 list.add(pkg);
                 AppShortcutStore.save(prefs, list);
                 renderAppShortcuts();
+                if (quickActions != null) quickActions.refresh();
             }
         });
     }
@@ -1615,7 +1588,7 @@ public class AdvanceActivity extends AppCompatActivity {
 
     /** Отправляет имя пакета + uid в SetModesService для выдачи app-op установки. */
     private void sendGrantInstall(String pkg) {
-        if (!GlobalVars.isBound || GlobalVars.serviceMessenger == null) {
+        if (!nativeService.isConnected()) {
             Log.w("$$$ Advance grantInstall $$$", "SetModesService не забинден");
             return;
         }
@@ -1626,15 +1599,10 @@ public class AdvanceActivity extends AppCompatActivity {
             Log.w("$$$ Advance grantInstall $$$", "не найден uid для " + pkg);
             return;
         }
-        try {
-            Message m = Message.obtain(null, MSG_GRANT_INSTALL, uid, 0);
-            Bundle b = new Bundle();
-            b.putString("pkg", pkg);
-            m.setData(b);
-            GlobalVars.serviceMessenger.send(m);
+        Bundle b = new Bundle();
+        b.putString("pkg", pkg);
+        if (nativeService.send(MSG_GRANT_INSTALL, uid, b, null)) {
             Log.i("$$$ Advance grantInstall $$$", "MSG_GRANT_INSTALL pkg=" + pkg + " uid=" + uid);
-        } catch (RemoteException e) {
-            e.printStackTrace();
         }
     }
 
@@ -1644,13 +1612,8 @@ public class AdvanceActivity extends AppCompatActivity {
                 .setTitle("Перезагрузка системы")
                 .setMessage("Система (голова) будет перезагружена. Несохранённые действия могут прерваться. Продолжить?")
                 .setPositiveButton("Перезагрузить", (d, w) -> {
-                    if (GlobalVars.isBound && GlobalVars.serviceMessenger != null) {
-                        try {
-                            GlobalVars.serviceMessenger.send(Message.obtain(null, MSG_REBOOT));
-                            Log.i("$$$ Advance reboot $$$", "MSG_REBOOT sent");
-                        } catch (RemoteException e) {
-                            e.printStackTrace();
-                        }
+                    if (nativeService.isConnected() && nativeService.send(MSG_REBOOT)) {
+                        Log.i("$$$ Advance reboot $$$", "MSG_REBOOT sent");
                     } else {
                         Log.w("$$$ Advance reboot $$$", "SetModesService не забинден");
                     }
@@ -1664,7 +1627,16 @@ public class AdvanceActivity extends AppCompatActivity {
         startActivity(new Intent(this, LoggingActivity.class));
     }
 
-    /** Переключение разделов (0 главный экран, 1 настройки автомобиля, 2 приложения и разделение экрана,
+    /** Opens the stock Android settings without depending on an OEM-specific component name. */
+    public void onButtonAndroidSettings(View v) {
+        try {
+            startActivity(new Intent(Settings.ACTION_SETTINGS));
+        } catch (RuntimeException e) {
+            Snackbar.make(v, "Системные настройки недоступны", Snackbar.LENGTH_LONG).show();
+        }
+    }
+
+    /** Переключение разделов (0 быстрые действия, 1 настройки автомобиля, 2 приложения и разделение экрана,
      *  3 Apollo Tech, 4 собственные команды, 5 кнопки на руле, 6 другое). */
     private void setSection(int index) {
         currentSection = index;
@@ -1690,6 +1662,11 @@ public class AdvanceActivity extends AppCompatActivity {
         }
         if (applyProgressAdvance != null) {
             applyProgressAdvance.setVisibility(applying ? View.VISIBLE : View.GONE);
+        }
+        if (quickActions != null) {
+            if (activityResumed && index == 0) quickActions.start();
+            else quickActions.stop();
+            if (index == 0) quickActions.refresh();
         }
         updateSystemMetricsPolling();
     }
@@ -2246,15 +2223,11 @@ public class AdvanceActivity extends AppCompatActivity {
 
     /** Немедленно применить форсированный EV через SetModesService. */
     private void sendForcedEv(boolean on) {
-        if (!GlobalVars.isBound || GlobalVars.serviceMessenger == null) {
+        if (!nativeService.isConnected()) {
             Log.w("$$$ Advance forcedEV $$$", "SetModesService не забинден");
             return;
         }
-        try {
-            GlobalVars.serviceMessenger.send(Message.obtain(null, MSG_APPLY_FORCED_EV, on ? 1 : 0, 0));
-        } catch (RemoteException e) {
-            e.printStackTrace();
-        }
+        nativeService.send(MSG_APPLY_FORCED_EV, on ? 1 : 0);
     }
 
     // -------------------------------------------------------------------------
@@ -2407,15 +2380,11 @@ public class AdvanceActivity extends AppCompatActivity {
     /** Немедленный старт/стоп LightSensorService через мессенджер, забинденный MainActivity. */
     private void sendAutoLightMessage(boolean enable) {
         int what = enable ? MSG_AUTO_LIGHT_ENABLE : MSG_AUTO_LIGHT_DISABLE;
-        if (!GlobalVars.isBound || GlobalVars.serviceMessenger == null) {
+        if (!nativeService.isConnected()) {
             Log.w("$$$ Advance autolight $$$", "SetModesService не забинден — состояние применится позже");
             return;
         }
-        try {
-            GlobalVars.serviceMessenger.send(Message.obtain(null, what));
-        } catch (RemoteException e) {
-            e.printStackTrace();
-        }
+        nativeService.send(what);
     }
 
     private void initParkingHeadlightsToggle() {
@@ -2444,6 +2413,7 @@ public class AdvanceActivity extends AppCompatActivity {
         Intent req = new Intent("ru.big.town.anative.REQUEST_LUX_UPDATE");
         req.setPackage("ru.big.town.anative");
         sendBroadcast(req);
+        if (quickActions != null && currentSection == 0) quickActions.start();
     }
 
     @Override
@@ -2453,6 +2423,7 @@ public class AdvanceActivity extends AppCompatActivity {
         super.onPause();
         try { unregisterReceiver(luxReceiver); } catch (Exception ignored) {}
         try { unregisterReceiver(settingSyncReceiver); } catch (Exception ignored) {}
+        if (quickActions != null) quickActions.stop();
     }
 
     @Override
@@ -2462,6 +2433,8 @@ public class AdvanceActivity extends AppCompatActivity {
         ++systemMetricsGeneration;
         uiHandler.removeCallbacks(systemMetricsTick);
         systemMetricsExecutor.shutdownNow();
+        if (quickActions != null) quickActions.close();
+        if (nativeService != null) nativeService.close();
         super.onDestroy();
     }
 }
