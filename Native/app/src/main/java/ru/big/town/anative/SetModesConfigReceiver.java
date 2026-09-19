@@ -23,6 +23,8 @@ public class SetModesConfigReceiver extends BroadcastReceiver {
             "ru.big.town.anative.DOOR_MEDIA_ANY_CHANGED";
     public static final String ACTION_PARKING_HEADLIGHTS_CHANGED =
             "ru.big.town.anative.PARKING_HEADLIGHTS_CHANGED";
+    public static final String ACTION_DEBUG_MODE_CHANGED =
+            "ru.big.town.anative.DEBUG_MODE_CHANGED";
 
     @Override
     public void onReceive(Context context, Intent intent) {
@@ -45,6 +47,10 @@ public class SetModesConfigReceiver extends BroadcastReceiver {
         }
         if (ACTION_PARKING_HEADLIGHTS_CHANGED.equals(action)) {
             applyParkingHeadlightsSetting(context, intent.getBooleanExtra("enabled", false));
+            return;
+        }
+        if (ACTION_DEBUG_MODE_CHANGED.equals(action)) {
+            applyDebugModeSetting(context, intent.getBooleanExtra("enabled", false));
             return;
         }
         if ("ru.big.town.anative.HOME_WIDGETS_CONFIG".equals(action)) {
@@ -149,6 +155,15 @@ public class SetModesConfigReceiver extends BroadcastReceiver {
             context.stopService(new Intent(context, LightSensorService.class));
         }
         Log.i(TAG, "headlightsOffInParking=" + enabled + "; autoLight=" + autoLight);
+    }
+
+    /** Applies the diagnostic CAN fence immediately; the provider remains the persistent source. */
+    private static void applyDebugModeSetting(Context context, boolean enabled) {
+        if (context == null) return;
+        context.getSharedPreferences("NativePrefs", Context.MODE_PRIVATE)
+                .edit().putBoolean("cacheDebugMode", enabled).apply();
+        CanSender.setDebugMode(enabled);
+        Log.i(TAG, "debugMode=" + enabled + " applied immediately");
     }
 
     private static void applyKeyboardMode(Context context, String requestedMode) {

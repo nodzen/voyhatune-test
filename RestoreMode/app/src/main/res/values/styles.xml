@@ -20,4 +20,16 @@
     <style name="NumberPickerTextColorStyle">
         <item name="android:textColorPrimary">#ffffff</item>
     </style>
+
+    <!-- One touch target and one visual language for every settings switch. -->
+    <style name="VoyahTuneSwitch">
+        <item name="android:thumb">@drawable/switch_thumb</item>
+        <item name="android:track">@drawable/switch_track</item>
+        <item name="android:minWidth">88dp</item>
+        <item name="android:minHeight">52dp</item>
+        <item name="android:paddingStart">8dp</item>
+        <item name="android:paddingEnd">8dp</item>
+        <item name="android:gravity">center_vertical</item>
+        <item name="android:showText">false</item>
+    </style>
 </resources>

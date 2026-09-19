@@ -131,6 +131,8 @@ public class AdvanceActivity extends AppCompatActivity {
             "ru.big.town.anative.DOOR_MEDIA_ANY_CHANGED";
     private static final String ACTION_PARKING_HEADLIGHTS_CHANGED =
             "ru.big.town.anative.PARKING_HEADLIGHTS_CHANGED";
+    private static final String ACTION_DEBUG_MODE_CHANGED =
+            "ru.big.town.anative.DEBUG_MODE_CHANGED";
     private static final String NATIVE_CONFIG_PERMISSION =
             "ru.big.town.anative.permission.BIND_SET_MODES_SERVICE";
 
@@ -577,8 +579,13 @@ public class AdvanceActivity extends AppCompatActivity {
         // Раздел «Другое»: тоггл «Режим отладки»
         Switch switchDebugMode = findViewById(R.id.switchDebugMode);
         switchDebugMode.setChecked(prefs.getBoolean("debugMode", false));
-        switchDebugMode.setOnCheckedChangeListener((b, checked) ->
-                prefs.edit().putBoolean("debugMode", checked).apply());
+        switchDebugMode.setOnCheckedChangeListener((b, checked) -> {
+            prefs.edit().putBoolean("debugMode", checked).apply();
+            Intent changed = new Intent(ACTION_DEBUG_MODE_CHANGED)
+                    .setClassName(NATIVE_PACKAGE, "ru.big.town.anative.SetModesConfigReceiver")
+                    .putExtra("enabled", checked);
+            sendBroadcast(changed, NATIVE_CONFIG_PERMISSION);
+        });
 
         // Keyboard modifications are optional full-only Frida agents. The agents overlap in the
         // Qinggan IME, so the two switches expose one mutually-exclusive off/en/ru preference.
@@ -2204,7 +2211,7 @@ public class AdvanceActivity extends AppCompatActivity {
     }
 
 
-    /** Сегмент-контрол «Предупреждение пешеходов» (Со звуком/Без звука). Перенесён с главного. */
+    /** Единый тумблер звука предупреждения пешеходов. */
     private void initPedestrianSoundGroup() {
         Switch toggle = findViewById(R.id.switchPedestrianSound);
         if (toggle == null) return;
@@ -2219,10 +2226,7 @@ public class AdvanceActivity extends AppCompatActivity {
         });
     }
 
-    /**
-     * Сегмент-контрол «Forced EV». В отличие от звука пешеходов команду шлём СРАЗУ при переключении:
-     * это режим тяги, пользователь ждёт немедленного эффекта, а не после «Применить».
-     */
+    /** Принудительный электрорежим применяется сразу при переключении. */
     private void initForcedEvGroup() {
         Switch toggle = findViewById(R.id.switchForcedEv);
         if (toggle == null) return;

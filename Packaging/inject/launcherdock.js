@@ -1859,9 +1859,32 @@ Java.perform(function () {
             var WIDGET_VIEW_INTER_NAME = "com.qinggan.app.mediaCentre.inter.WidgetViewInter";
             var SRC_BEAN_NAME = "com.pateo.voyah.mediaCard.bean.SrcMediaBean";
             var RES_ENUM_NAME = "com.pateo.voyah.mediaCard.home.enums.MediaResEnum";
+            var MEDIA_BEAN_INTER_NAME = "com.pateo.voyah.mediaCard.home.inter.MediaBeanInter";
             var ADAPTER_NAME = "com.pateo.voyah.mediaCard.home.activity.MediaSrcAdapter";
             var HOLDER_NAME = "com.pateo.voyah.mediaCard.home.activity.MediaSrcAdapter$MediaSrcHolder";
             var HOME_SOURCE_NAME = "com.pateo.voyah.mediaCard.home.activity.HomeSrcMediaActivity";
+            var MEDIA_TAB_VIEW_NAME = "com.pateo.voyah.mediaCard.home.view.mediaTab.DropMediaTabView";
+            var MEDIA_TAB_ADAPTER_NAME =
+                    "com.pateo.voyah.mediaCard.home.view.mediaTab.DropMediaTabAdapter";
+            var MEDIA_TAB_CLICK_INTER_NAME =
+                    "com.pateo.voyah.mediaCard.home.view.mediaTab.DropMediaTabAdapter$MediaTabClickInter";
+            var MEDIA_TAB_HOLDER_NAME =
+                    "com.pateo.voyah.mediaCard.home.view.mediaTab.DropMediaTabAdapter$MediaTabHolder";
+            var MEDIA_TAB_HOLDER_CLICK_NAME =
+                    "com.pateo.voyah.mediaCard.home.view.mediaTab.MediaTabAdapter$MediaTabHolder$1";
+            var MEDIA_TAB_HOLDER_DROP_CLICK_NAME =
+                    "com.pateo.voyah.mediaCard.home.view.mediaTab.DropMediaTabAdapter$MediaTabHolder$1";
+            var TAB_MEDIA_VIEW_NAME = "com.pateo.voyah.mediaCard.home.view.TabMediaView";
+            var MEDIA_TAB_V1_NAME = "com.pateo.voyah.mediaCard.home.view.mediaTab.MediaTabViewV1";
+            var MEDIA_TAB_ADAPTER_V1_NAME =
+                    "com.pateo.voyah.mediaCard.home.view.mediaTab.MediaTabAdapterV1";
+            var MEDIA_TAB_CLICK_INTER_V1_NAME =
+                    "com.pateo.voyah.mediaCard.home.view.mediaTab.MediaTabAdapterV1$MediaTabClickInter";
+            var MEDIA_TAB_V97A_NAME = "com.pateo.voyah.mediaCard.home.view.mediaTab.MediaTabView97a";
+            var MEDIA_TAB_HOLDER_V1_NAME =
+                    "com.pateo.voyah.mediaCard.home.view.mediaTab.MediaTabAdapterV1$MediaTabHolder";
+            var MEDIA_TAB_HOLDER_V1_CLICK_NAME =
+                    "com.pateo.voyah.mediaCard.home.view.mediaTab.MediaTabAdapterV1$MediaTabHolder$1";
             var HOME_BASE_VIEW_NAME = "com.pateo.voyah.mediaCard.home.view.HomeBaseView";
             var BIG_MEDIA_CARD_NAME = "com.pateo.voyah.mediaCard.home.view.BigMediaCard";
             var BASE_MEDIA_VIEW_NAME = "com.qinggan.app.mediaCentre.view.BaseMediaView";
@@ -1884,10 +1907,33 @@ Java.perform(function () {
             var managerHooked = false;
             var widgetUpdateHooked = false;
             var nativeCardInfoHooked = false;
-            var artMediaDeoptimized = false;
             var nativeViewHooked = false;
             var sourceHooked = false;
             var homeHooked = false;
+            var mediaTabFillHooked = false;
+            var mediaTabV1FillHooked = false;
+            var mediaTabHolderHooked = false;
+            var mediaTabV1HolderHooked = false;
+            var mediaTabClickHooked = false;
+            var mediaTabV1ClickHooked = false;
+            var mediaTabLegacyClickHooked = false;
+            var mediaTabDropClickHooked = false;
+            var mediaTabCallbackHooked = false;
+            var mediaTabV1CallbackHooked = false;
+            var mediaTabTypeHooked = false;
+            var mediaTabV1TypeHooked = false;
+            var mediaTabHooksLogged = false;
+            var mediaTabRefreshPending = false;
+            var mediaTabFillLogs = 0;
+            var mediaTabFillCallLogs = 0;
+            var mediaTabRefreshMatchLogs = 0;
+            var mediaTabAdapterLogs = 0;
+            var mediaTabClickLogs = 0;
+            var mediaTabCallbackLogs = 0;
+            var mediaTabDirectClickClass = null;
+            var mediaTabCallbackClass = null;
+            var mediaTabV1CallbackClass = null;
+            var mediaTabDirectClickViews = IdentityHashMapMedia.$new();
             var refreshPending = false;
             var bridgeAvailable = false;
             var bridgeSelected = false;
@@ -2074,18 +2120,23 @@ Java.perform(function () {
             function bridgeSourcesFrom(sources, selectedSource) {
                 var result = [];
                 var selectedPresent = false;
+                var seen = {};
                 for (var i = 0; i < sources.length; i++) {
-                    if (isBridgeSourcePackage(sources[i].pkg)) {
-                        result.push(sources[i]);
+                    var source = sources[i];
+                    var pkg = source === null || source === undefined ? "" : source.pkg;
+                    if (isBridgeSourcePackage(pkg) && !seen[pkg]) {
+                        seen[pkg] = true;
+                        result.push(source);
                         if (selectedSource !== null && selectedSource !== undefined
-                                && sources[i].pkg === selectedSource.pkg) selectedPresent = true;
+                                && pkg === selectedSource.pkg) selectedPresent = true;
                     }
                 }
                 // During service startup the snapshot broadcast can arrive before the source
                 // cursor has been populated. Keep the selected app visible instead of letting the
                 // OEM picker briefly fall back to its stock DAB/WeChat row.
                 if (selectedSource !== null && selectedSource !== undefined
-                        && isBridgeSourcePackage(selectedSource.pkg) && !selectedPresent) {
+                        && isBridgeSourcePackage(selectedSource.pkg) && !selectedPresent
+                        && !seen[selectedSource.pkg]) {
                     result.push(selectedSource);
                 }
                 return result;
@@ -2501,17 +2552,816 @@ Java.perform(function () {
             function currentWecar() {
                 return bridgeConnected(bridgeAvailable, bridgeSelected, selectedMediaPackage);
             }
-            function deoptimizeMediaPaths() {
-                if (artMediaDeoptimized) return;
+            function bridgeSourceAvailable() {
+                return enabled && bridgeSources.length > 0;
+            }
+            function refreshBridgeSourcesForPicker() {
+                // The provider publishes source rows and the selected snapshot independently.
+                // During an OEM↔app handoff the launcher cache can therefore still contain only
+                // qgmedia when the user opens the popup. Read the small source cursor at the
+                // point of use so an active third-party session is not silently dropped.
                 try {
-                    if (typeof Java.deoptimizeEverything === "function") {
-                        Java.deoptimizeEverything();
-                        artMediaDeoptimized = true;
-                        Log.i(TAG, "[media] ART media paths deoptimized for OEM callbacks");
+                    refreshMediaConfig();
+                    var sources = readMediaSources();
+                    if (sources.length === 0) return;
+                    var snapshot = readMediaSnapshot();
+                    var selectedSource = findSelectedBridgeSource(snapshot, sources);
+                    var nextSources = enabled ? bridgeSourcesFrom(sources, selectedSource) : [];
+                    bridgeSources = nextSources;
+                    bridgeSourcesKey = sourceTopologyKey(nextSources);
+                    bridgeAvailable = enabled && (nextSources.length > 0 || selectedSource !== null);
+                    bridgeSelected = bridgeAvailable && selectedSource !== null;
+                    selectedMediaPackage = bridgeSelected ? selectedSource.pkg : "";
+                } catch (e) {
+                    Log.w(TAG, "[media] picker source refresh failed: " + e);
+                }
+            }
+            function pickerBridgeSource() {
+                if (!bridgeSourceAvailable()) return null;
+                if (selectedMediaPackage) {
+                    for (var selected = 0; selected < bridgeSources.length; selected++) {
+                        if (bridgeSources[selected].pkg === selectedMediaPackage) {
+                            return bridgeSources[selected];
+                        }
+                    }
+                }
+                return bridgeSources[0];
+            }
+            function isBridgeTabBean(bean) {
+                if (bean === null || bean === undefined) return false;
+                try { return isWecar(bean.getMediaEnum()); }
+                catch (e) { return false; }
+            }
+            function isBridgeTabItem(item) {
+                if (item === null || item === undefined) return false;
+                if (isBridgeTabBean(item)) return true;
+                var mediaRes = freshMediaResEnum("WE_CAR");
+                if (mediaRes === null) return false;
+                try {
+                    return item === mediaRes || mediaRes.equals(item)
+                            || enumName(item) === "WE_CAR";
+                } catch (e) { return false; }
+            }
+            function addBridgeMediaTab(list) {
+                if (list === null || list === undefined) return false;
+                var bridgeCount = 0;
+                var stock = ArrayListMedia.$new();
+                for (var i = 0; i < list.size(); i++) {
+                    var item = list.get(i);
+                    if (isBridgeTabItem(item)) {
+                        bridgeCount++;
+                    } else {
+                        stock.add(item);
+                    }
+                }
+                if (!bridgeSourceAvailable()) {
+                    if (bridgeCount === 0) return false;
+                    list.clear();
+                    list.addAll(stock);
+                    return true;
+                }
+                var mediaRes = freshMediaResEnum("WE_CAR");
+                if (mediaRes === null) return false;
+                // The OEM adapter stores MediaResEnum values directly. Always reduce the bridge
+                // row to exactly one item; repeated source changes must never create two Spotify
+                // rows (or two rows for the same currently selected application).
+                if (bridgeCount === 1) return false;
+                stock.add(mediaRes);
+                list.clear();
+                list.addAll(stock);
+                return true;
+            }
+            function refreshNativeMediaTabAdapter(view) {
+                if (view === null || view === undefined || !bridgeSourceAvailable()) return;
+                try {
+                    var tabView = fieldValue(view, "tabView97a");
+                    var adapter = tabView === null ? null : fieldValue(tabView, "mediaTabAdapter");
+                    if (adapter === null) return;
+                    var data = fieldValue(adapter, "data");
+                    if (data === null) return;
+                    var copy = ArrayListMedia.$new();
+                    for (var i = 0; i < data.size(); i++) copy.add(data.get(i));
+                    var before = copy.size();
+                    addBridgeMediaTab(copy);
+                    if (copy.size() === before) return;
+                    var fillData = adapter.fillData.overload("java.util.List");
+                    fillData.call(adapter, copy);
+                    if (mediaTabAdapterLogs < 20) {
+                        mediaTabAdapterLogs++;
+                        Log.i(TAG, "[media] native source tab adapter appended WECAR_FLOW for "
+                                + (pickerBridgeSource() === null ? "media" : pickerBridgeSource().pkg));
                     }
                 } catch (e) {
-                    Log.w(TAG, "[media] ART media deoptimization unavailable: " + e);
+                    if (mediaTabAdapterLogs < 20) {
+                        mediaTabAdapterLogs++;
+                        Log.w(TAG, "[media] native source tab adapter refresh failed: " + e);
+                    }
                 }
+            }
+            function applyBridgeMediaTabHolder(holder) {
+                try {
+                    var bean = fieldValue(holder, "mediaBean");
+                    var source = isBridgeTabBean(bean) ? pickerBridgeSource() : null;
+                    if (source === null) return;
+                    var name = fieldValue(holder, "tvName");
+                    if (name !== null) name.setText.overload("java.lang.CharSequence").call(
+                            name, StringMedia.$new(source.label || source.pkg));
+                    var icon = fieldValue(holder, "ivIcon");
+                    if (icon !== null) icon.setImageDrawable(ctx().getPackageManager()
+                            .getApplicationIcon(StringMedia.$new(source.pkg)));
+                    var selected = fieldValue(holder, "ivSel");
+                    if (selected !== null) {
+                        selected.setVisibility(source.pkg === selectedMediaPackage ? 0 : 8);
+                    }
+                } catch (e) {}
+            }
+            function hideMediaTabOwner(owner) {
+                if (owner === null || owner === undefined) return false;
+                try {
+                    Java.cast(owner, Java.use("android.view.View")).setVisibility(8);
+                    return true;
+                } catch (castError) {}
+                try {
+                    owner.setVisibility(8);
+                    return true;
+                } catch (directError) {}
+                return false;
+            }
+            function hideMediaTabAdapterLater(adapter) {
+                if (adapter === null || adapter === undefined) return;
+                try {
+                    var owner = fieldValue(adapter, "linearLayout");
+                    setTimeout(function () {
+                        try {
+                            Java.scheduleOnMainThread(function () {
+                                hideMediaTabOwner(owner);
+                            });
+                        } catch (closeError) {}
+                    }, 120);
+                } catch (e) {}
+            }
+            function ensureMediaTabCallbackClass(interfaceName, className, label) {
+                if (label === "v1" && mediaTabV1CallbackClass !== null) {
+                    return mediaTabV1CallbackClass;
+                }
+                if (label !== "v1" && mediaTabCallbackClass !== null) {
+                    return mediaTabCallbackClass;
+                }
+                try {
+                    var ClickInter = Java.use(interfaceName);
+                    var Proxy = Java.registerClass({
+                        name: className,
+                        implements: [ClickInter],
+                        fields: {delegate: "java.lang.Object", adapter: "java.lang.Object"},
+                        methods: {
+                            onItemClick: {
+                                returnType: "void",
+                                argumentTypes: [MEDIA_BEAN_INTER_NAME],
+                                implementation: function (bean) {
+                                    var adapter = fieldValue(this, "adapter");
+                                    try {
+                                        if (isBridgeTabBean(bean)) {
+                                            var source = pickerBridgeSource();
+                                            if (source !== null) {
+                                                selectBridgeSource(source);
+                                                Log.i(TAG, "[media] native source tab callback " + label
+                                                        + " selected: " + source.pkg);
+                                                // Return before OEM onItemClick reaches play(BT_MUSIC).
+                                                // Hide the popup only after its callback unwinds.
+                                                hideMediaTabAdapterLater(adapter);
+                                                return;
+                                            }
+                                        } else if (bridgeSelected) {
+                                            clearBridgeSourceSelection();
+                                        }
+                                    } catch (e) {
+                                        Log.w(TAG, "[media] native source tab callback " + label
+                                                + " failed: " + e);
+                                    }
+                                    try {
+                                        var delegate = fieldValue(this, "delegate");
+                                        if (delegate !== null) {
+                                            delegate.onItemClick.overload(MEDIA_BEAN_INTER_NAME).call(
+                                                    delegate, bean);
+                                        }
+                                    } catch (delegateError) {
+                                        Log.w(TAG, "[media] native source tab callback " + label
+                                                + " delegate failed: " + delegateError);
+                                    }
+                                }
+                            }
+                        }
+                    });
+                    if (label === "v1") mediaTabV1CallbackClass = Proxy;
+                    else mediaTabCallbackClass = Proxy;
+                    return Proxy;
+                } catch (e) {
+                    Log.w(TAG, "[media] native source tab callback " + label
+                            + " proxy unavailable: " + e);
+                    return null;
+                }
+            }
+            function wrapMediaTabCallback(callback, adapter, interfaceName, className, label) {
+                if (callback === null || callback === undefined) return callback;
+                try {
+                    if (fieldValue(callback, "delegate") !== null) return callback;
+                } catch (e) {}
+                var Proxy = ensureMediaTabCallbackClass(interfaceName, className, label);
+                if (Proxy === null) return callback;
+                try {
+                    var proxy = Proxy.$new();
+                    if (!setObjectField(proxy, "delegate", Java.retain(callback))) return callback;
+                    if (!setObjectField(proxy, "adapter", Java.retain(adapter))) return callback;
+                    return Java.retain(proxy);
+                } catch (e) {
+                    Log.w(TAG, "[media] native source tab callback " + label
+                            + " wrap failed: " + e);
+                    return callback;
+                }
+            }
+            function installMediaTabCallbackHook(adapterClassName, interfaceName,
+                    className, label) {
+                try {
+                    var Adapter = Java.use(adapterClassName);
+                    var setInter = Adapter.setTabClickInter.overload(interfaceName);
+                    setInter.implementation = function (callback) {
+                        var wrapped = wrapMediaTabCallback(callback, this, interfaceName,
+                                className, label);
+                        return setInter.call(this, wrapped);
+                    };
+                    if (mediaTabCallbackLogs < 8) {
+                        mediaTabCallbackLogs++;
+                        Log.i(TAG, "[media] native source tab " + label
+                                + " callback setter hook installed");
+                    }
+                    return true;
+                } catch (e) {
+                    Log.w(TAG, "[media] native source tab callback " + label
+                            + " hook unavailable: " + e);
+                    return false;
+                }
+            }
+            function wrapLiveMediaTabCallback(adapter, interfaceName, className, label) {
+                if (adapter === null || adapter === undefined) return;
+                try {
+                    var callback = fieldValue(adapter, "tabClickInter");
+                    if (callback === null) {
+                        if (mediaTabCallbackLogs < 8) {
+                            mediaTabCallbackLogs++;
+                            Log.i(TAG, "[media] native source tab " + label
+                                    + " callback field is empty");
+                        }
+                    } else {
+                        var wrapped = wrapMediaTabCallback(callback, adapter, interfaceName,
+                                className, label);
+                        if (wrapped !== callback) {
+                            setObjectField(adapter, "tabClickInter", wrapped);
+                            if (mediaTabCallbackLogs < 8) {
+                                mediaTabCallbackLogs++;
+                                Log.i(TAG, "[media] native source tab " + label
+                                        + " callback proxy attached");
+                            }
+                        }
+                    }
+                } catch (e) {}
+            }
+            function wrapLiveMediaTabCallbacks() {
+                try {
+                    Java.choose(MEDIA_TAB_VIEW_NAME, {
+                        onMatch: function (view) {
+                            wrapLiveMediaTabCallback(fieldValue(view, "mediaTabAdapter"),
+                                    MEDIA_TAB_CLICK_INTER_NAME,
+                                    "ru.big.town.anative.VoyahDropMediaTabCallback", "drop");
+                        },
+                        onComplete: function () {}
+                    });
+                } catch (e) {}
+                try {
+                    Java.choose(MEDIA_TAB_V1_NAME, {
+                        onMatch: function (view) {
+                            wrapLiveMediaTabCallback(fieldValue(view, "mediaTabAdapter"),
+                                    MEDIA_TAB_CLICK_INTER_V1_NAME,
+                                    "ru.big.town.anative.VoyahMediaTabV1Callback", "v1");
+                        },
+                        onComplete: function () {}
+                    });
+                } catch (e) {}
+            }
+            function installBridgeMediaTabClick(holder) {
+                if (holder === null || holder === undefined) return;
+                try {
+                    var bean = fieldValue(holder, "mediaBean");
+                    if (!isBridgeTabBean(bean)) return;
+                    var item = fieldValue(holder, "itemView");
+                    if (item === null || mediaTabDirectClickViews.containsKey(item)) return;
+                    if (mediaTabDirectClickClass === null) {
+                        mediaTabDirectClickClass = Java.registerClass({
+                            name: "ru.big.town.anative.VoyahMediaTabClick",
+                            implements: [Java.use("android.view.View$OnClickListener")],
+                            fields: {holder: "java.lang.Object"},
+                            methods: {
+                                onClick: {
+                                    returnType: "void",
+                                    argumentTypes: ["android.view.View"],
+                                    implementation: function (view) {
+                                        try {
+                                            var currentHolder = fieldValue(this, "holder");
+                                            var source = pickerBridgeSource();
+                                            if (source !== null) {
+                                                selectBridgeSource(source);
+                                                Log.i(TAG, "[media] native source tab direct selected: "
+                                                        + source.pkg);
+                                                // The OEM source tab is still dispatching this click. Hiding
+                                                // its LinearLayout or forcing a full media refresh from the
+                                                // callback re-enters the adapter and can freeze the launcher.
+                                                // The provider broadcasts the new selection; close only after
+                                                // the OEM callback has returned.
+                                                setTimeout(function () {
+                                                    try {
+                                                        Java.scheduleOnMainThread(function () {
+                                                            hideMediaTabOwner(currentHolder);
+                                                        });
+                                                    } catch (closeError) {}
+                                                }, 120);
+                                            }
+                                        } catch (e) {
+                                            Log.w(TAG, "[media] native source tab direct click failed: " + e);
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    if (mediaTabDirectClickClass === null) return;
+                    var listener = mediaTabDirectClickClass.$new();
+                    if (!setObjectField(listener, "holder", Java.retain(holder))) return;
+                    mediaTabDirectClickViews.put(item, Java.retain(listener));
+                    item.setOnClickListener(listener);
+                    if (mediaTabClickLogs < 20) {
+                        mediaTabClickLogs++;
+                        Log.i(TAG, "[media] native source tab direct click installed");
+                    }
+                } catch (e) {
+                    if (mediaTabClickLogs < 20) {
+                        mediaTabClickLogs++;
+                        Log.w(TAG, "[media] native source tab direct click install failed: " + e);
+                    }
+                }
+            }
+            function installBridgeMediaTabClicks(adapter) {
+                if (adapter === null || adapter === undefined) return;
+                try {
+                    var holders = fieldValue(adapter, "holders");
+                    if (holders === null) return;
+                    for (var i = 0; i < holders.size(); i++) {
+                        installBridgeMediaTabClick(holders.get(i));
+                    }
+                } catch (e) {}
+            }
+            function installBridgeMediaTabDirectView(view) {
+                if (view === null || view === undefined || !bridgeSourceAvailable()) return;
+                try {
+                    var adapter = fieldValue(view, "mediaTabAdapter");
+                    if (adapter !== null) {
+                        wrapLiveMediaTabCallback(adapter, MEDIA_TAB_CLICK_INTER_V1_NAME,
+                                "ru.big.town.anative.VoyahMediaTabV1Callback", "v1");
+                    }
+                    var owner = fieldValue(adapter, "linearLayout") || view;
+                    var childCount = owner.getChildCount();
+                    if (childCount <= 0) {
+                        if (mediaTabClickLogs < 20) {
+                            mediaTabClickLogs++;
+                            Log.w(TAG, "[media] native source tab direct view has no children");
+                        }
+                        return;
+                    }
+                    var item = owner.getChildAt(childCount - 1);
+                    if (item === null || mediaTabDirectClickViews.containsKey(item)) return;
+                    if (mediaTabDirectClickClass === null) {
+                        mediaTabDirectClickClass = Java.registerClass({
+                            name: "ru.big.town.anative.VoyahMediaTabClick",
+                            implements: [Java.use("android.view.View$OnClickListener")],
+                            fields: {holder: "java.lang.Object"},
+                            methods: {
+                                onClick: {
+                                    returnType: "void",
+                                    argumentTypes: ["android.view.View"],
+                                    implementation: function (clickedView) {
+                                        try {
+                                            var owner = fieldValue(this, "holder");
+                                            var source = pickerBridgeSource();
+                                            if (source !== null) {
+                                                selectBridgeSource(source);
+                                                Log.i(TAG, "[media] native source tab direct selected: "
+                                                        + source.pkg);
+                                                setTimeout(function () {
+                                                    try {
+                                                        Java.scheduleOnMainThread(function () {
+                                                            hideMediaTabOwner(owner);
+                                                        });
+                                                    } catch (closeError) {}
+                                                }, 120);
+                                            }
+                                        } catch (e) {
+                                            Log.w(TAG, "[media] native source tab direct click failed: " + e);
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    if (mediaTabDirectClickClass === null) return;
+                    var listener = mediaTabDirectClickClass.$new();
+                    if (!setObjectField(listener, "holder", Java.retain(owner))) {
+                        if (mediaTabClickLogs < 20) {
+                            mediaTabClickLogs++;
+                            Log.w(TAG, "[media] native source tab direct view owner field unavailable");
+                        }
+                        return;
+                    }
+                    mediaTabDirectClickViews.put(item, Java.retain(listener));
+                    item.setOnClickListener(listener);
+                    if (mediaTabClickLogs < 20) {
+                        mediaTabClickLogs++;
+                        Log.i(TAG, "[media] native source tab direct view click installed");
+                    }
+                } catch (e) {
+                    if (mediaTabClickLogs < 20) {
+                        mediaTabClickLogs++;
+                        Log.w(TAG, "[media] native source tab direct view install failed: " + e);
+                    }
+                }
+            }
+            function hideMediaTabHolderLater(holder) {
+                if (holder === null || holder === undefined) return;
+                try {
+                    var adapter = fieldValue(holder, "this$0");
+                    var owner = adapter === null ? null : fieldValue(adapter, "linearLayout");
+                    setTimeout(function () {
+                        try {
+                            Java.scheduleOnMainThread(function () {
+                                hideMediaTabOwner(owner);
+                            });
+                        } catch (closeError) {}
+                    }, 120);
+                } catch (e) {}
+            }
+            function installNativeMediaTabInnerClick(className, label) {
+                try {
+                    var HolderClick = Java.use(className);
+                    var click = HolderClick.onClick.overload("android.view.View");
+                    click.implementation = function (view) {
+                        var holder = null;
+                        try {
+                            holder = fieldValue(this, "this$1");
+                            var bean = holder === null ? null : fieldValue(holder, "mediaBean");
+                            var bridgeRow = isBridgeTabBean(bean);
+                            if (mediaTabClickLogs < 20) {
+                                mediaTabClickLogs++;
+                                Log.i(TAG, "[media] native source tab " + label + " row clicked bridge="
+                                        + bridgeRow);
+                            }
+                            if (bridgeRow) {
+                                var source = pickerBridgeSource();
+                                if (source !== null) {
+                                    selectBridgeSource(source);
+                                    Log.i(TAG, "[media] native source tab " + label + " selected: "
+                                            + source.pkg);
+                                    // Do not call the OEM TabMediaView callback for WECAR_FLOW: its
+                                    // play(MediaEnum) switch treats the unknown value as BT_MUSIC and
+                                    // opens the stock Bluetooth page. Close after the click returns.
+                                    hideMediaTabHolderLater(holder);
+                                    return;
+                                }
+                            } else if (bridgeSelected) {
+                                clearBridgeSourceSelection();
+                            }
+                        } catch (e) {
+                            Log.w(TAG, "[media] native source tab " + label + " click failed: " + e);
+                        }
+                        return click.call(this, view);
+                    };
+                    return true;
+                } catch (e) {
+                    Log.w(TAG, "[media] native source tab " + label + " click hook unavailable: " + e);
+                    return false;
+                }
+            }
+            function refreshNativeMediaTabV1Adapter(view) {
+                if (view === null || view === undefined || !bridgeSourceAvailable()) return;
+                try {
+                    var adapter = fieldValue(view, "mediaTabAdapter");
+                    if (adapter === null) return;
+                    var data = fieldValue(adapter, "data");
+                    if (data === null) return;
+                    var copy = ArrayListMedia.$new();
+                    for (var i = 0; i < data.size(); i++) copy.add(data.get(i));
+                    var before = copy.size();
+                    addBridgeMediaTab(copy);
+                    if (copy.size() === before) return;
+                    var fillData = adapter.fillData.overload("java.util.List");
+                    fillData.call(adapter, copy);
+                    if (mediaTabAdapterLogs < 20) {
+                        mediaTabAdapterLogs++;
+                        Log.i(TAG, "[media] native source tab V1 adapter appended WECAR_FLOW for "
+                                + (pickerBridgeSource() === null ? "media" : pickerBridgeSource().pkg));
+                    }
+                } catch (e) {
+                    if (mediaTabAdapterLogs < 20) {
+                        mediaTabAdapterLogs++;
+                        Log.w(TAG, "[media] native source tab V1 adapter refresh failed: " + e);
+                    }
+                }
+            }
+            function refreshNativeMediaTabs() {
+                if ((!mediaTabFillHooked && !mediaTabV1FillHooked) || mediaTabRefreshPending) return;
+                mediaTabRefreshPending = true;
+                setTimeout(function () {
+                    mediaTabRefreshPending = false;
+                    try {
+                        var TabMedia = Java.use(TAB_MEDIA_VIEW_NAME);
+                        var initMedia = TabMedia.initMedia.overload();
+                        Java.choose(TAB_MEDIA_VIEW_NAME, {
+                            onMatch: function (view) {
+                                try {
+                                    if (mediaTabRefreshMatchLogs < 20) {
+                                        mediaTabRefreshMatchLogs++;
+                                        Log.i(TAG, "[media] native source tab view found");
+                                    }
+                                    var retained = Java.retain(view);
+                                    Java.scheduleOnMainThread(function () {
+                                        try {
+                                            initMedia.call(retained);
+                                            refreshNativeMediaTabAdapter(retained);
+                                            if (mediaTabRefreshMatchLogs < 20) {
+                                                mediaTabRefreshMatchLogs++;
+                                                Log.i(TAG, "[media] native source tab view refreshed");
+                                            }
+                                        }
+                                        catch (e) { Log.w(TAG, "[media] native tab refresh failed: " + e); }
+                                        finally { try { retained.$dispose(); } catch (ignored) {} }
+                                    });
+                                } catch (e) {}
+                            },
+                            onComplete: function () {}
+                        });
+                        Java.choose(MEDIA_TAB_V1_NAME, {
+                            onMatch: function (view) {
+                                try {
+                                    refreshNativeMediaTabV1Adapter(view);
+                                    if (mediaTabRefreshMatchLogs < 20) {
+                                        mediaTabRefreshMatchLogs++;
+                                        Log.i(TAG, "[media] native source tab V1 view refreshed");
+                                    }
+                                } catch (e) {}
+                            },
+                            onComplete: function () {}
+                        });
+                        Java.choose(MEDIA_TAB_V97A_NAME, {
+                            onMatch: function (view) {
+                                try {
+                                    refreshNativeMediaTabV1Adapter(view);
+                                    if (mediaTabRefreshMatchLogs < 20) {
+                                        mediaTabRefreshMatchLogs++;
+                                        Log.i(TAG, "[media] native source tab 97a view refreshed");
+                                    }
+                                } catch (e) {}
+                            },
+                            onComplete: function () {}
+                        });
+                    } catch (e) {
+                        Log.w(TAG, "[media] native tab refresh unavailable: " + e);
+                    }
+                }, 40);
+            }
+            function installMediaTabHooks() {
+                try {
+                    var TabAdapter = Java.use(MEDIA_TAB_ADAPTER_NAME);
+                    if (!mediaTabFillHooked) {
+                        var fillData = TabAdapter.fillData.overload("java.util.List");
+                        fillData.implementation = function (list) {
+                            if (mediaTabFillCallLogs < 20) {
+                                mediaTabFillCallLogs++;
+                                Log.i(TAG, "[media] native source tab fill size="
+                                        + (list === null ? "null" : list.size())
+                                        + " available=" + bridgeSourceAvailable()
+                                        + " sources=" + bridgeSources.length
+                                        + " selected=" + bridgeSelected);
+                            }
+                            if (list === null) {
+                                return fillData.call(this, list);
+                            }
+                            refreshBridgeSourcesForPicker();
+                            if (!bridgeSourceAvailable()) return fillData.call(this, list);
+                            var copy = ArrayListMedia.$new();
+                            for (var i = 0; i < list.size(); i++) copy.add(list.get(i));
+                            var before = copy.size();
+                            addBridgeMediaTab(copy);
+                            if (mediaTabFillLogs < 20 && copy.size() !== before) {
+                                mediaTabFillLogs++;
+                                Log.i(TAG, "[media] native source tab appended WECAR_FLOW for "
+                                        + (pickerBridgeSource() === null ? "media" : pickerBridgeSource().pkg));
+                            }
+                            return fillData.call(this, copy);
+                        };
+                        mediaTabFillHooked = true;
+                    }
+                } catch (e) {
+                    Log.w(TAG, "[media] native source tab fill hook unavailable: " + e);
+                }
+                try {
+                    var Holder = Java.use(MEDIA_TAB_HOLDER_NAME);
+                    if (!mediaTabHolderHooked) {
+                        var bindView = Holder.bindView.overload("int");
+                        bindView.implementation = function (position) {
+                            var result = bindView.call(this, position);
+                            try {
+                                var bean = fieldValue(this, "mediaBean");
+                                var source = isBridgeTabBean(bean) ? pickerBridgeSource() : null;
+                                if (source !== null) {
+                                    var name = fieldValue(this, "tvName");
+                                    if (name !== null) name.setText.overload("java.lang.CharSequence").call(
+                                            name, StringMedia.$new(source.label || source.pkg));
+                                    var icon = fieldValue(this, "ivIcon");
+                                    if (icon !== null) icon.setImageDrawable(ctx().getPackageManager()
+                                            .getApplicationIcon(StringMedia.$new(source.pkg)));
+                                }
+                            } catch (e) {}
+                            return result;
+                        };
+                        mediaTabHolderHooked = true;
+                    }
+                } catch (e) {
+                    Log.w(TAG, "[media] native source tab holder hook unavailable: " + e);
+                }
+                try {
+                    var TabV1 = Java.use(MEDIA_TAB_ADAPTER_V1_NAME);
+                    if (!mediaTabV1FillHooked) {
+                        var fillDataV1 = TabV1.fillData.overload("java.util.List");
+                        fillDataV1.implementation = function (list) {
+                            if (list === null) {
+                                return fillDataV1.call(this, list);
+                            }
+                            refreshBridgeSourcesForPicker();
+                            if (!bridgeSourceAvailable()) return fillDataV1.call(this, list);
+                            var copy = ArrayListMedia.$new();
+                            for (var i = 0; i < list.size(); i++) copy.add(list.get(i));
+                            var before = copy.size();
+                            addBridgeMediaTab(copy);
+                            if (mediaTabFillLogs < 20 && copy.size() !== before) {
+                                mediaTabFillLogs++;
+                                Log.i(TAG, "[media] native source tab V1 appended WECAR_FLOW for "
+                                        + (pickerBridgeSource() === null ? "media" : pickerBridgeSource().pkg));
+                            }
+                            return fillDataV1.call(this, copy);
+                        };
+                        mediaTabV1FillHooked = true;
+                    }
+                } catch (e) {
+                    Log.w(TAG, "[media] native source tab V1 fill hook unavailable: " + e);
+                }
+                try {
+                    var HolderV1 = Java.use(MEDIA_TAB_HOLDER_V1_NAME);
+                    if (!mediaTabV1HolderHooked) {
+                        var bindViewV1 = HolderV1.bindView.overload("int");
+                        bindViewV1.implementation = function (position) {
+                            var result = bindViewV1.call(this, position);
+                            applyBridgeMediaTabHolder(this);
+                            return result;
+                        };
+                        mediaTabV1HolderHooked = true;
+                    }
+                } catch (e) {
+                    Log.w(TAG, "[media] native source tab V1 holder hook unavailable: " + e);
+                }
+                try {
+                    var DropView = Java.use(MEDIA_TAB_VIEW_NAME);
+                    if (!mediaTabTypeHooked) {
+                        var setMediaType = DropView.setMediaType.overload(ENUM_NAME);
+                        setMediaType.implementation = function (mediaType) {
+                            if (currentWecar()) {
+                                var canonical = freshMediaEnum("WECAR_FLOW");
+                                if (canonical !== null) mediaType = canonical;
+                            }
+                            return setMediaType.call(this, mediaType);
+                        };
+                        mediaTabTypeHooked = true;
+                    }
+                } catch (e) {
+                    Log.w(TAG, "[media] native source tab legacy type hook unavailable: " + e);
+                }
+                try {
+                    var TabV1Type = Java.use(MEDIA_TAB_V1_NAME);
+                    if (!mediaTabV1TypeHooked) {
+                        var setMediaTypeV1 = TabV1Type.setMediaType.overload(ENUM_NAME);
+                        setMediaTypeV1.implementation = function (mediaType) {
+                            if (currentWecar()) {
+                                var canonical = freshMediaEnum("WECAR_FLOW");
+                                if (canonical !== null) mediaType = canonical;
+                            }
+                            return setMediaTypeV1.call(this, mediaType);
+                        };
+                        mediaTabV1TypeHooked = true;
+                    }
+                } catch (e) {
+                    Log.w(TAG, "[media] native source tab V1 type hook unavailable: " + e);
+                }
+                try {
+                    var HolderV1Click = Java.use(MEDIA_TAB_HOLDER_V1_CLICK_NAME);
+                    if (!mediaTabV1ClickHooked) {
+                        var clickV1 = HolderV1Click.onClick.overload("android.view.View");
+                        clickV1.implementation = function (view) {
+                            try {
+                                var holder = fieldValue(this, "this$1");
+                                var bean = holder === null ? null : fieldValue(holder, "mediaBean");
+                                var bridgeRow = isBridgeTabBean(bean);
+                                if (mediaTabClickLogs < 20) {
+                                    mediaTabClickLogs++;
+                                    Log.i(TAG, "[media] native source tab V1 row clicked bridge="
+                                            + bridgeRow + " bean=" + (bean === null ? "null" : bean));
+                                }
+                                if (bridgeRow) {
+                                    var source = pickerBridgeSource();
+                                    if (source !== null) {
+                                        selectBridgeSource(source);
+                                        Log.i(TAG, "[media] native source tab V1 selected: " + source.pkg);
+                                        try {
+                                            var adapter = fieldValue(holder, "this$0");
+                                            var owner = adapter === null ? null : fieldValue(adapter, "linearLayout");
+                                            setTimeout(function () {
+                                                try {
+                                                    Java.scheduleOnMainThread(function () {
+                                                        hideMediaTabOwner(owner);
+                                                    });
+                                                } catch (closeError) {}
+                                            }, 120);
+                                        } catch (hideError) {}
+                                        return;
+                                    }
+                                }
+                                // A stock BT/DAB/USB row is an explicit handoff away from the
+                                // third-party bridge. Clear the Native pin before OEM code updates
+                                // its own selected row; otherwise Spotify remains the bridge source
+                                // on the next refresh even though the OEM checkmark moved.
+                                if (bridgeSelected) clearBridgeSourceSelection();
+                            } catch (e) {}
+                            return clickV1.call(this, view);
+                        };
+                        mediaTabV1ClickHooked = true;
+                    }
+                } catch (e) {
+                    Log.w(TAG, "[media] native source tab V1 click hook unavailable: " + e);
+                }
+                if (!mediaTabLegacyClickHooked) {
+                    mediaTabLegacyClickHooked = installNativeMediaTabInnerClick(
+                            MEDIA_TAB_HOLDER_CLICK_NAME, "legacy");
+                }
+                if (!mediaTabDropClickHooked) {
+                    mediaTabDropClickHooked = installNativeMediaTabInnerClick(
+                            MEDIA_TAB_HOLDER_DROP_CLICK_NAME, "drop");
+                }
+                try {
+                    var TabMedia = Java.use(TAB_MEDIA_VIEW_NAME);
+                    if (!mediaTabClickHooked) {
+                        var onItemClick = TabMedia.onItemClick.overload(MEDIA_BEAN_INTER_NAME);
+                        onItemClick.implementation = function (bean) {
+                            if (isBridgeTabBean(bean)) {
+                                var source = pickerBridgeSource();
+                                if (source !== null) {
+                                    selectBridgeSource(source);
+                                    Log.i(TAG, "[media] native source tab selected: " + source.pkg);
+                                    // TabMediaView's stock callback calls play(MediaEnum) and
+                                    // opens the OEM Bluetooth/music page for an enum it does not
+                                    // know. The source row must stay in the native picker: select
+                                    // the MediaSession and close only the popup, without entering
+                                    // the stock page or re-entering MediaManager from this click.
+                                    try {
+                                        this.hideView.overload().call(this);
+                                    } catch (hideError) {
+                                        try { this.setVisibility(8); } catch (visibilityError) {}
+                                    }
+                                    return;
+                                }
+                            } else if (bridgeSelected) {
+                                // A stock BT/DAB/USB row explicitly hands control back to the
+                                // OEM. Release the persisted third-party pin before OEM play().
+                                clearBridgeSourceSelection();
+                            }
+                            return onItemClick.call(this, bean);
+                        };
+                        mediaTabClickHooked = true;
+                    }
+                } catch (e) {
+                    Log.w(TAG, "[media] native source tab click hook unavailable: " + e);
+                }
+                var installed = mediaTabFillHooked || mediaTabV1FillHooked || mediaTabHolderHooked
+                        || mediaTabV1HolderHooked || mediaTabClickHooked || mediaTabV1ClickHooked
+                        || mediaTabLegacyClickHooked || mediaTabDropClickHooked;
+                if (installed && !mediaTabHooksLogged) {
+                    mediaTabHooksLogged = true;
+                    Log.i(TAG, "[media] native source tab hooks installed");
+                }
+                return installed;
             }
             function addWecarToNativeViewList(list) {
                 // HomeBaseView filters WECAR_FLOW out when the optional OEM WeChat Music
@@ -2570,7 +3420,6 @@ Java.perform(function () {
                 if (managerHooked) return true;
                 var manager = managerInstance();
                 if (manager === null) return false;
-                deoptimizeMediaPaths();
                 installControlProxy();
                 installWidgetUpdateHook();
                 installNativeCardInfoHook();
@@ -2792,8 +3641,12 @@ Java.perform(function () {
             }
             function appendBridgeBeans(list) {
                 if (list === null || list === undefined) return;
+                var seen = {};
                 for (var i = 0; i < bridgeSources.length; i++) {
-                    var bean = makeBridgeBean(bridgeSources[i]);
+                    var source = bridgeSources[i];
+                    if (source === null || source === undefined || seen[source.pkg]) continue;
+                    seen[source.pkg] = true;
+                    var bean = makeBridgeBean(source);
                     if (bean !== null) list.add(bean);
                 }
             }
@@ -2975,6 +3828,7 @@ Java.perform(function () {
                 installManagerHooks();
                 installSourceHooks();
                 installHomeSourceHooks();
+                installMediaTabHooks();
                 if (bridgeSelected) {
                     pushNativeSnapshot(!!force);
                     if (transition.refreshThirdParty || force) scheduleNativeRefresh();
@@ -3133,6 +3987,7 @@ Java.perform(function () {
             installManagerHooks();
             installSourceHooks();
             installHomeSourceHooks();
+            installMediaTabHooks();
             registerMediaReceiver();
             refreshMediaState();
             installHomeWidgetHooks();

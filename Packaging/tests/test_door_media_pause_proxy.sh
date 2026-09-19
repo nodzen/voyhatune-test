@@ -56,11 +56,12 @@ require "$DOCK" 'clearBridgeSourceSelection();'
 require "$DOCK" 'if (!currentWecar()) return;'
 require "$INSTRUMENT" 'if (!currentWecar()) return;'
 
-# App→app and app→BT transitions must have no intermediate NO/DAB frame, and BT is re-announced
-# after both OEM widgets have had time to attach.
+# App→app and app→BT transitions must have no intermediate NO/DAB frame. The launcher can safely
+# re-announce BT after both OEM widgets have attached; the instrument process must leave BT to its
+# stock controller because calling MediaManager during MusicBaseView construction crashes this ROM.
 require "$DOCK" 'clearNativeSelection(transition.notifyNoMedia);'
 require "$INSTRUMENT" 'clearNativeSelection(transition.notifyNoMedia);'
 require "$DOCK" 'scheduleNativeBluetoothRefresh();'
-require "$INSTRUMENT" 'scheduleNativeBluetoothRefresh();'
+require "$INSTRUMENT" 'stock BT_MUSIC refresh retained; no manual MediaManager callback'
 
 echo "PASS: door pause proxy is at-most-once and preserves the no-session Qinggan route"

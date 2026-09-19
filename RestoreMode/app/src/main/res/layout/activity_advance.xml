@@ -398,15 +398,60 @@
                 android:textColor="#888888"
                 android:textSize="20px" />
 
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="18dp"
+                android:text="Сохранение режимов"
+                android:textColor="#FFFFFF"
+                android:textSize="28px"
+                android:textStyle="bold" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_margin="8dp"
+                android:background="@drawable/layout_category_bg"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <Switch
+                    android:id="@+id/switchRememberDriveMode"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:checked="true"
+                    android:text="Запоминать режим езды"
+                    android:textColor="#FFFFFF"
+                    android:textSize="19sp" />
+
+                <Switch
+                    android:id="@+id/switchRememberEnergyMode"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:checked="true"
+                    android:text="Запоминать режим энергии"
+                    android:textColor="#FFFFFF"
+                    android:textSize="19sp" />
+
+                <Switch
+                    android:id="@+id/switchRememberRecycleMode"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:checked="true"
+                    android:text="Запоминать рекуперацию"
+                    android:textColor="#FFFFFF"
+                    android:textSize="19sp" />
+            </LinearLayout>
+
             <!-- На приборке остаётся только собственно переключатель вывода музыки. Остальные
                  медиа-действия доступны в «Быстрых действиях», где ими пользуются чаще. -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_margin="5dp"
+                android:layout_margin="8dp"
                 android:background="@drawable/layout_category_bg"
                 android:orientation="vertical"
-                android:padding="12dp">
+                android:padding="16dp">
 
                 <TextView
                     android:layout_width="wrap_content"
@@ -440,7 +485,7 @@
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_margin="5dp"
+                android:layout_margin="8dp"
                 android:animateLayoutChanges="true"
                 android:background="@drawable/layout_category_bg"
                 android:orientation="vertical"
@@ -449,7 +494,7 @@
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginHorizontal="6dp"
+                    android:layout_marginHorizontal="8dp"
                     android:layout_marginBottom="8dp"
                     android:gravity="center_vertical"
                     android:orientation="horizontal">
@@ -505,7 +550,7 @@
                     style="@style/radio_group_height_70_style"
                     android:layout_width="match_parent"
                     android:layout_height="70dp"
-                    android:layout_marginHorizontal="6dp"
+                    android:layout_marginHorizontal="8dp"
                     android:background="@drawable/radio_group_height_70_bg"
                     android:orientation="horizontal">
 
@@ -555,7 +600,7 @@
                     style="@style/radio_group_height_70_style"
                     android:layout_width="match_parent"
                     android:layout_height="70dp"
-                    android:layout_marginHorizontal="6dp"
+                    android:layout_marginHorizontal="8dp"
                     android:background="@drawable/radio_group_height_70_bg"
                     android:orientation="horizontal">
 
@@ -605,7 +650,7 @@
                     style="@style/radio_group_height_70_style"
                     android:layout_width="match_parent"
                     android:layout_height="70dp"
-                    android:layout_marginHorizontal="6dp"
+                    android:layout_marginHorizontal="8dp"
                     android:background="@drawable/radio_group_height_70_bg"
                     android:orientation="horizontal">
 
@@ -658,11 +703,11 @@
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_margin="5dp"
+                android:layout_margin="8dp"
                 android:background="@drawable/layout_category_bg"
                 android:orientation="vertical"
-                android:paddingHorizontal="12dp"
-                android:paddingVertical="8dp">
+                android:paddingHorizontal="16dp"
+                android:paddingVertical="12dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -682,8 +727,7 @@
                         android:id="@+id/switchPedestrianSound"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Со звуком"
-                        android:textColor="#ffffff"
+                        android:showText="false"
                         android:thumb="@drawable/switch_thumb"
                         android:track="@drawable/switch_track" />
                 </LinearLayout>
@@ -697,15 +741,15 @@
                     android:textSize="19px" />
             </LinearLayout>
 
-            <!-- Forced EV — отдельный компактный переключатель, не смешиваем его с безопасностью. -->
+            <!-- Принудительный электрорежим — отдельный переключатель. -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_margin="5dp"
+                android:layout_margin="8dp"
                 android:background="@drawable/layout_category_bg"
                 android:orientation="vertical"
-                android:paddingHorizontal="12dp"
-                android:paddingVertical="8dp">
+                android:paddingHorizontal="16dp"
+                android:paddingVertical="12dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -725,8 +769,7 @@
                         android:id="@+id/switchForcedEv"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Forced EV"
-                        android:textColor="#ffffff"
+                        android:showText="false"
                         android:thumb="@drawable/switch_thumb"
                         android:track="@drawable/switch_track" />
                 </LinearLayout>
@@ -753,12 +796,12 @@
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_margin="5dp"
+                android:layout_margin="8dp"
                 android:animateLayoutChanges="true"
                 android:background="@drawable/layout_category_bg"
                 android:orientation="vertical"
-                android:paddingHorizontal="6dp"
-                android:paddingVertical="8dp">
+                android:paddingHorizontal="16dp"
+                android:paddingVertical="12dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -804,10 +847,11 @@
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_margin="5dp"
+                android:layout_margin="8dp"
                 android:animateLayoutChanges="true"
                 android:background="@drawable/layout_category_bg"
-                android:orientation="vertical">
+                android:orientation="vertical"
+                android:padding="8dp">
 
                 <!-- Верхний ряд: заголовок + подзаголовок | показание датчика -->
                 <LinearLayout
@@ -815,7 +859,7 @@
                     android:layout_height="wrap_content"
                     android:orientation="horizontal"
                     android:gravity="center_vertical"
-                    android:layout_marginHorizontal="6dp"
+                    android:layout_marginHorizontal="8dp"
                     android:layout_marginTop="4dp">
 
                     <LinearLayout
@@ -858,7 +902,7 @@
                     android:layout_height="wrap_content"
                     android:orientation="horizontal"
                     android:gravity="center_vertical"
-                    android:layout_marginHorizontal="6dp"
+                    android:layout_marginHorizontal="8dp"
                     android:layout_marginTop="6dp"
                     android:layout_marginBottom="6dp">
 
@@ -880,13 +924,13 @@
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginHorizontal="5dp"
-                android:layout_marginTop="10dp"
+                android:layout_marginHorizontal="8dp"
+                android:layout_marginTop="8dp"
                 android:orientation="horizontal"
                 android:gravity="center_vertical"
                 android:background="@drawable/layout_category_bg"
                 android:paddingHorizontal="16dp"
-                android:paddingVertical="8dp">
+                android:paddingVertical="12dp">
 
                 <LinearLayout
                     android:layout_width="0dp"
@@ -924,13 +968,13 @@
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginHorizontal="5dp"
-                android:layout_marginTop="10dp"
+                android:layout_marginHorizontal="8dp"
+                android:layout_marginTop="8dp"
                 android:orientation="horizontal"
                 android:gravity="center_vertical"
                 android:background="@drawable/layout_category_bg"
                 android:paddingHorizontal="16dp"
-                android:paddingVertical="8dp">
+                android:paddingVertical="12dp">
 
                 <TextView
                     android:layout_width="0dp"
@@ -953,7 +997,7 @@
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginHorizontal="5dp"
+                android:layout_marginHorizontal="8dp"
                 android:layout_marginTop="14dp"
                 android:text="@string/wiper_cold_desc"
                 android:textColor="#888888"
@@ -972,13 +1016,13 @@
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginHorizontal="5dp"
-                android:layout_marginTop="16dp"
+                android:layout_marginHorizontal="8dp"
+                android:layout_marginTop="8dp"
                 android:orientation="horizontal"
                 android:gravity="center_vertical"
                 android:background="@drawable/layout_category_bg"
                 android:paddingHorizontal="16dp"
-                android:paddingVertical="8dp">
+                android:paddingVertical="12dp">
 
                 <LinearLayout
                     android:layout_width="0dp"
@@ -1016,13 +1060,13 @@
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginHorizontal="5dp"
-                android:layout_marginTop="10dp"
+                android:layout_marginHorizontal="8dp"
+                android:layout_marginTop="8dp"
                 android:orientation="horizontal"
                 android:gravity="center_vertical"
                 android:background="@drawable/layout_category_bg"
                 android:paddingHorizontal="16dp"
-                android:paddingVertical="8dp">
+                android:paddingVertical="12dp">
 
                 <LinearLayout
                     android:layout_width="0dp"
@@ -1060,13 +1104,13 @@
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginHorizontal="5dp"
-                android:layout_marginTop="10dp"
+                android:layout_marginHorizontal="8dp"
+                android:layout_marginTop="8dp"
                 android:orientation="horizontal"
                 android:gravity="center_vertical"
                 android:background="@drawable/layout_category_bg"
                 android:paddingHorizontal="16dp"
-                android:paddingVertical="8dp">
+                android:paddingVertical="12dp">
 
                 <LinearLayout
                     android:layout_width="0dp"
@@ -1313,7 +1357,7 @@
                 android:gravity="center_vertical"
                 android:background="@drawable/layout_category_bg"
                 android:paddingHorizontal="16dp"
-                android:paddingVertical="10dp">
+                android:paddingVertical="12dp">
 
                 <TextView
                     android:layout_width="0dp"
@@ -1910,7 +1954,7 @@
             android:gravity="center_vertical"
             android:background="@drawable/layout_category_bg"
             android:paddingHorizontal="16dp"
-            android:paddingVertical="8dp">
+            android:paddingVertical="12dp">
 
             <TextView
                 android:layout_width="0dp"
@@ -1937,7 +1981,7 @@
             android:orientation="vertical"
             android:background="@drawable/layout_category_bg"
             android:paddingHorizontal="16dp"
-            android:paddingVertical="8dp">
+            android:paddingVertical="12dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -2038,7 +2082,7 @@
             android:gravity="center_vertical"
             android:background="@drawable/layout_category_bg"
             android:paddingHorizontal="16dp"
-            android:paddingVertical="8dp">
+            android:paddingVertical="12dp">
 
             <LinearLayout
                 android:layout_width="0dp"
@@ -2080,7 +2124,7 @@
             android:gravity="center_vertical"
             android:background="@drawable/layout_category_bg"
             android:paddingHorizontal="16dp"
-            android:paddingVertical="8dp">
+            android:paddingVertical="12dp">
 
             <LinearLayout
                 android:layout_width="0dp"
@@ -2121,7 +2165,7 @@
             android:orientation="vertical"
             android:background="@drawable/layout_category_bg"
             android:paddingHorizontal="16dp"
-            android:paddingVertical="10dp">
+            android:paddingVertical="12dp">
 
             <TextView
                 android:layout_width="wrap_content"
@@ -2191,7 +2235,7 @@
             android:orientation="vertical"
             android:background="@drawable/layout_category_bg"
             android:paddingHorizontal="16dp"
-            android:paddingVertical="10dp">
+            android:paddingVertical="12dp">
 
             <!-- Верхняя строка: заголовок + подзаголовок | тумблер -->
             <LinearLayout
@@ -2449,7 +2493,7 @@
                 android:layout_marginTop="8dp"
                 android:orientation="vertical"
                 android:background="@drawable/layout_category_bg"
-                android:padding="14dp">
+                android:padding="16dp">
 
                 <TextView
                     android:layout_width="wrap_content"
@@ -2523,7 +2567,7 @@
                 android:layout_marginTop="8dp"
                 android:orientation="vertical"
                 android:background="@drawable/layout_category_bg"
-                android:padding="14dp">
+                android:padding="16dp">
 
                 <TextView
                     android:layout_width="wrap_content"
@@ -2598,7 +2642,7 @@
                 android:layout_marginTop="8dp"
                 android:orientation="vertical"
                 android:background="@drawable/layout_category_bg"
-                android:padding="14dp">
+                android:padding="16dp">
 
                 <TextView
                     android:layout_width="wrap_content"
@@ -2673,7 +2717,7 @@
                 android:layout_marginTop="8dp"
                 android:orientation="vertical"
                 android:background="@drawable/layout_category_bg"
-                android:padding="14dp">
+                android:padding="16dp">
 
                 <TextView
                     android:layout_width="wrap_content"

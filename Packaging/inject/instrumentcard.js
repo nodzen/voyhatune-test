@@ -801,9 +801,12 @@ Java.perform(function () {
             pushNativeSnapshot(!!force);
             if (transition.refreshThirdParty || force) scheduleNativeRefresh();
         } else {
-            refreshNativeBluetooth(snapshot);
+            // BT_MUSIC is owned by the OEM Bluetooth controller. Calling MediaManager's
+            // onMediaTypeChange from this process while MusicBaseView is still constructing
+            // crashes this firmware in BaseMediaView.initProgress (SIGSEGV). Let the stock
+            // controller publish its own BT event; we only clear our WECAR state above.
             if (transition.refreshBluetooth || force) {
-                scheduleNativeBluetoothRefresh();
+                log("stock BT_MUSIC refresh retained; no manual MediaManager callback");
             }
         }
     }
