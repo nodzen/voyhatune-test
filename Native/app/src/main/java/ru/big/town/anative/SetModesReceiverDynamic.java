@@ -91,6 +91,23 @@ public class SetModesReceiverDynamic extends BroadcastReceiver {
             }
         }
 
+        // All Apps launches ordinary physical-display tasks through the OEM AppLauncher and do
+        // not pass through openFreeformApp(). Record that launch explicitly so "last session" is
+        // not limited to split/dock paths.
+        if ("ru.big.town.anative.RECORD_LAST_SESSION".equals(receivedIntent) && BuildConfig.IS_FULL) {
+            String pkg = intent.getStringExtra("pkg");
+            int displayId = intent.getIntExtra("display", 0);
+            if (displayId != 0 && displayId != 1) {
+                Log.w(TAG, "RECORD_LAST_SESSION отклонён: неверный display " + displayId);
+            } else if (hasLaunchIntent(context, pkg)) {
+                LastSessionStore.recordFreeform(context.getApplicationContext(), pkg, displayId);
+                Log.i(TAG, "last session recorded from All Apps: " + pkg
+                        + " display=" + displayId);
+            } else {
+                Log.w(TAG, "RECORD_LAST_SESSION отклонён: нет launch intent для " + pkg);
+            }
+        }
+
         // Открытие СПЛИТА, назначенного слоту дока, по долгому нажатию (launcherdock.js шлёт номер слота).
         // Детали сплита читаем из Settings.Global — их зеркалит mirrorDock из DOCK_CONFIG (VoyahTune).
         // SplitHostActivity.launchSplit уходит на VD (обычный движок сплита); коллизии панелей он гасит сам.
@@ -397,6 +414,18 @@ public class SetModesReceiverDynamic extends BroadcastReceiver {
             return FullscreenPackagePolicy.contains(csv, pkg);
         } catch (Exception e) {
             Log.w(TAG, "fullscreen allowlist unavailable: " + e.getMessage());
+            return false;
+        }
+    }
+
+    private static boolean hasLaunchIntent(Context context, String pkg) {
+        if (context == null || pkg == null || pkg.trim().isEmpty()
+                || pkg.indexOf(',') >= 0 || pkg.indexOf('|') >= 0 || pkg.indexOf(' ') >= 0) {
+            return false;
+        }
+        try {
+            return context.getPackageManager().getLaunchIntentForPackage(pkg) != null;
+        } catch (RuntimeException e) {
             return false;
         }
     }

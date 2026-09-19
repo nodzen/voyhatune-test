@@ -813,6 +813,21 @@ Java.perform(function () {
         }
     }
 
+    // Ordinary All Apps launches use the OEM AppLauncher directly, so Native does not see the
+    // openFreeform bridge that records the last session. Keep the record in the same protected
+    // receiver used by the other launcher paths.
+    function rememberLastSession(pkg, displayId) {
+        try {
+            if (displayId !== 0 && displayId !== 1) return;
+            var i = Intent.$new("ru.big.town.anative.RECORD_LAST_SESSION");
+            i.setClassName(OUR_PKG, "ru.big.town.anative.SetModesReceiverDynamic");
+            i.putExtra.overload('java.lang.String', 'java.lang.String').call(i, "pkg", "" + pkg);
+            i.putExtra.overload('java.lang.String', 'int').call(i, "display", displayId);
+            i.addFlags(0x00000020);
+            ctx().sendBroadcast(i);
+        } catch (e) { Log.w(TAG, "[allapps] remember last session failed: " + e); }
+    }
+
     // Штатный All Apps фильтрует почти все сторонние APK. Вариант voboost решает это хуком
     // AllAppDataManager + AllAppAdapter. Здесь тот же контракт для обоих физических экранов;
     // запуск делегируется OEM AppLauncher с mScreenId владельца All Apps. У AllAppAdapter нет mScreenId,
@@ -868,6 +883,7 @@ Java.perform(function () {
             var iconCache = {};
             var labelCache = {};
             var packageRefreshTimer = null;
+            var preparedAllAppsLists = {};
             // The map is only needed by the optional passenger home rail. The full-screen launcher
             // uses the native dynamic AppBean renderer and therefore has no scroll-time JS hook.
             var syntheticStartByList = {};
@@ -915,6 +931,7 @@ Java.perform(function () {
                     var screenId = Number(screenIdArg);
                     var pkg = packageFromIntent(intent);
                     if (isUserFullscreen(pkg) && launchFullscreen(pkg, screenId)) return;
+                    rememberLastSession(pkg, screenId);
                     return startAppIntent.call(this, context, intent, screenIdArg);
                 };
                 var startAppComponent = AppLauncher.startApp.overload(
@@ -923,6 +940,7 @@ Java.perform(function () {
                     var pkg = cleanJavaString(pkgArg);
                     var screenId = Number(screenIdArg);
                     if (isUserFullscreen(pkg) && launchFullscreen(pkg, screenId)) return;
+                    rememberLastSession(pkg, screenId);
                     return startAppComponent.call(this,
                             context, pkgArg, classArg, screenIdArg);
                 };
@@ -1076,7 +1094,8 @@ Java.perform(function () {
             invalidateAllAppsCaches = function () {
                 installedSnapshot = null;
                 syntheticStartByList = {};
-            }
+                preparedAllAppsLists = {};
+            };
 
             function beanAt(adapter, position) {
                 var beans = adapterBeans(adapter);
@@ -1273,8 +1292,12 @@ Java.perform(function () {
             getAll.implementation = function (screenId) {
                 var list = getAll.call(Data, screenId);
                 if ((screenId === 0 || screenId === 1) && list !== null) {
-                    filterFrozenApps(list);
-                    addMissingApps(list);
+                    var preparedKey = screenId + ":" + listKey(list);
+                    if (!preparedAllAppsLists[preparedKey]) {
+                        filterFrozenApps(list);
+                        addMissingApps(list);
+                        preparedAllAppsLists[preparedKey] = true;
+                    }
                     syntheticStartByList[listKey(list)] = syntheticStartInList(list);
                 }
                 return list;
@@ -1828,6 +1851,7 @@ Java.perform(function () {
         function installMediaWidgetBridge() {
             var NOW_PLAYING = "ru.big.town.anative.NOW_PLAYING";
             var SOURCES = "ru.big.town.anative.NOW_PLAYING_SOURCES";
+            var WAKE_REFRESH = "ru.big.town.anative.INSTRUMENT_WAKE_REFRESH";
             var ENUM_NAME = "com.qinggan.media.helper.MediaEnum";
             var INFO_NAME = "com.qinggan.media.helper.base.bean.QinMediaInfo";
             var MANAGER_NAME = "com.qinggan.app.mediaCentre.MediaManager";
@@ -2132,8 +2156,14 @@ Java.perform(function () {
             }
             function retainNativeInfo(info) {
                 var previous = nativeInfo;
-                try { nativeInfo = Java.retain(info); }
-                catch (e) { nativeInfo = info; }
+                try {
+                    var retained = Java.retain(info);
+                    nativeInfo = Java.cast(retained, QinMediaInfo);
+                } catch (e) {
+                    nativeInfo = null;
+                    Log.w(TAG, "[media] QinMediaInfo retain/cast failed: " + e);
+                    return null;
+                }
                 // MediaManager posts listener work asynchronously. Keep the old global reference
                 // alive for a few frames after replacing it, then release it so frequent playback
                 // updates do not accumulate Frida global references.
@@ -2192,7 +2222,8 @@ Java.perform(function () {
                             unRegisterCallback: {returnType: "void", argumentTypes: ["com.qinggan.media.helper.MediaBrowserHelper$MediaListener"], implementation: function () {}}
                         }
                     });
-                    mediaControl = ControlClass.$new();
+                    var proxy = ControlClass.$new();
+                    mediaControl = Java.cast(proxy, Control);
                     Log.i(TAG, "[media] native IMediaControl proxy registered");
                 } catch (e) { Log.w(TAG, "[media] IMediaControl proxy unavailable: " + e); }
             }
@@ -2343,10 +2374,12 @@ Java.perform(function () {
                     var method = WidgetManager.updateView.overload(ENUM_NAME);
                     method.implementation = function () {
                         var mediaEnum = arguments[0];
-                        if (nativeInfo !== null && currentWecar()
-                                && enumName(mediaEnum) === "WECAR_FLOW") {
+                        if (nativeInfo !== null && currentWecar()) {
+                            var canonicalEnum = freshMediaEnum("WECAR_FLOW");
+                            if (canonicalEnum === null) return method.apply(this, arguments);
                             var actualManager = fieldValue(this, "mediaManager");
                             if (actualManager !== null) {
+                                putManagerValue(actualManager, "mediaInfoMap", canonicalEnum, nativeInfo);
                                 putManagerValue(actualManager, "mediaInfoMap", mediaEnum, nativeInfo);
                                 var actualEnum = fieldValue(this, "curMediaEnum");
                                 if (actualEnum !== null && actualEnum !== mediaEnum) {
@@ -2358,8 +2391,7 @@ Java.perform(function () {
                             // the callback directly is the only reliable way to keep both stock
                             // card variants on the same QinMediaInfo object.
                             var callback = fieldValue(this, "widgetViewInter");
-                            var callbackEnum = fieldValue(this, "curMediaEnum");
-                            if (callbackEnum === null) callbackEnum = mediaEnum;
+                            var callbackEnum = canonicalEnum;
                             if (callback !== null && WidgetViewInter !== null) {
                                 try {
                                     applyNativeMediaResource(callback);
@@ -2369,7 +2401,8 @@ Java.perform(function () {
                                     setObjectField(this, "lastMediaEnum", callbackEnum);
                                     if (mediaInfoQueryLogs < 40) {
                                         mediaInfoQueryLogs++;
-                                        Log.i(TAG, "[media] direct native card update for WECAR_FLOW");
+                                        Log.i(TAG, "[media] direct native card update normalized from "
+                                                + enumName(mediaEnum));
                                     }
                                     return;
                                 } catch (directError) {
@@ -2380,6 +2413,9 @@ Java.perform(function () {
                                 mediaInfoQueryLogs++;
                                 Log.i(TAG, "[media] WidgetControlMediaManager map refreshed for WECAR_FLOW");
                             }
+                            // If the callback object is absent, still prevent a DAB/BT enum from
+                            // selecting the OEM error renderer.
+                            return method.apply(this, [canonicalEnum]);
                         }
                         return method.apply(this, arguments);
                     };
@@ -2402,17 +2438,17 @@ Java.perform(function () {
                     method.implementation = function () {
                         var mediaEnum = arguments[0];
                         var mediaInfo = arguments[1];
-                        if (nativeInfo !== null && currentWecar()
-                                && enumName(mediaEnum) === "WECAR_FLOW") {
+                        if (nativeInfo !== null && currentWecar()) {
+                            var canonicalEnum = freshMediaEnum("WECAR_FLOW");
+                            if (canonicalEnum === null) return method.apply(this, arguments);
                             applyNativeMediaResource(this);
-                        }
-                        if (mediaInfo === null && nativeInfo !== null && currentWecar()
-                                && enumName(mediaEnum) === "WECAR_FLOW") {
                             if (mediaInfoQueryLogs < 40) {
                                 mediaInfoQueryLogs++;
-                                Log.i(TAG, "[media] BigMediaCard null info repaired for WECAR_FLOW");
+                                Log.i(TAG, "[media] BigMediaCard normalized from "
+                                        + enumName(mediaEnum) + " info="
+                                        + (mediaInfo === null ? "null" : "present"));
                             }
-                            return method.apply(this, [mediaEnum, nativeInfo]);
+                            return method.apply(this, [canonicalEnum, nativeInfo]);
                         }
                         return method.apply(this, arguments);
                     };
@@ -2431,11 +2467,36 @@ Java.perform(function () {
                             try {
                                 var result = handler(this, arguments);
                                 if (result !== null && result !== undefined && result.handled) return result.value;
+                                if (result !== null && result !== undefined && result.args) {
+                                    return overload.apply(this, result.args);
+                                }
                             } catch (e) { Log.w(TAG, "[media] manager " + name + " failed: " + e); }
                             return overload.apply(this, arguments);
                         };
                     });
                 } catch (e) { Log.w(TAG, "[media] manager hook " + name + " unavailable: " + e); }
+            }
+            function bridgeManagerArguments(name, args) {
+                if (nativeInfo === null || !currentWecar()) return null;
+                var mediaEnum = freshMediaEnum("WECAR_FLOW");
+                if (mediaEnum === null) return null;
+                var replacement = [];
+                for (var i = 0; i < args.length; i++) replacement.push(args[i]);
+                if (name === "onMediaTypeChange" && replacement.length >= 1) {
+                    replacement[0] = mediaEnum;
+                } else if (name === "onMediaInfoChange" && replacement.length >= 2) {
+                    replacement[0] = mediaEnum;
+                    replacement[1] = nativeInfo;
+                } else if (name === "onMediaStateChange" && replacement.length >= 1) {
+                    replacement[0] = mediaEnum;
+                    if (replacement.length >= 3) replacement[2] = nativeInfo;
+                } else if (name === "setCurMedia" && replacement.length >= 2) {
+                    replacement[0] = mediaEnum;
+                    replacement[1] = nativeInfo;
+                } else {
+                    return null;
+                }
+                return {args: replacement};
             }
             function currentWecar() {
                 return bridgeConnected(bridgeAvailable, bridgeSelected, selectedMediaPackage);
@@ -2502,7 +2563,11 @@ Java.perform(function () {
                 return nativeViewHooked;
             }
             function installManagerHooks() {
-                if (managerHooked || !ensureMediaClasses()) return false;
+                if (!ensureMediaClasses()) return false;
+                // The launcher can load MediaManager before HomeBaseView. Keep view support
+                // retryable so a late-created card still receives the WECAR_FLOW model.
+                installNativeViewSupport();
+                if (managerHooked) return true;
                 var manager = managerInstance();
                 if (manager === null) return false;
                 deoptimizeMediaPaths();
@@ -2532,6 +2597,12 @@ Java.perform(function () {
                                 + enumName(args[0]) + " currentWecar=" + currentWecar());
                     }
                     return {handled: true, value: nativeInfo};
+                });
+                ["setCurMedia", "onMediaTypeChange", "onMediaInfoChange",
+                    "onMediaStateChange"].forEach(function (name) {
+                    hookManagerMethod(name, function (self, args) {
+                        return bridgeManagerArguments(name, args);
+                    });
                 });
                 hookManagerMethod("getMediaControl", function (self, args) {
                     return isWecar(args[0]) && currentWecar() && mediaControl !== null
@@ -2567,6 +2638,9 @@ Java.perform(function () {
             function setNativeCurrent(manager, info) {
                 var mediaEnum = freshMediaEnum("WECAR_FLOW");
                 if (mediaEnum === null) return false;
+                // Some OEM card variants read the private map directly and never call the hooked
+                // getter. Populate it before setCurMedia posts any asynchronous listener work.
+                putManagerValue(manager, "mediaInfoMap", mediaEnum, info);
                 var currentSet = false;
                 try {
                     manager.setCurMedia.overload(ENUM_NAME, INFO_NAME, "java.lang.Object").call(
@@ -2591,6 +2665,7 @@ Java.perform(function () {
                 // populate the info map before any queued listener can reread it, otherwise the
                 // OEM card briefly receives null and falls back to DAB/NO.
                 info = retainNativeInfo(info);
+                if (info === null) return;
                 if (!setNativeCurrent(manager, info)) return;
                 var mediaEnum = freshMediaEnum("WECAR_FLOW");
                 if (mediaEnum === null) return;
@@ -2607,12 +2682,16 @@ Java.perform(function () {
                             manager, mediaEnum, isPlaybackActive(snapshot.state), info, true, NativeMediaTag);
                 } catch (e2) {
                     Log.w(TAG, "[media] native state callback failed: " + e2);
-                    return;
                 }
-                // setCurMedia() has already changed the current enum. Avoid a second
-                // onMediaTypeChange(): its OEM listener performs another map read and one of the
-                // stock cards can observe null, reverting to DAB/NO. Info/state callbacks update
-                // both cards with the populated object.
+                // OEM DAB/BT callbacks can arrive after our info/state callbacks. Re-announce the
+                // canonical type only after the map and nativeInfo are populated; the manager hook
+                // above also rewrites any late OEM enum back to this same WECAR object.
+                try {
+                    manager.onMediaTypeChange.overload(ENUM_NAME, "java.lang.Object").call(
+                            manager, mediaEnum, NativeMediaTag);
+                } catch (e3) {
+                    Log.w(TAG, "[media] native type callback failed: " + e3);
+                }
                 lastNativeKey = key;
                 Log.i(TAG, "[media] MediaSession " + snapshot.pkg + " -> native WECAR_FLOW: "
                         + snapshot.title);
@@ -2847,7 +2926,7 @@ Java.perform(function () {
                     return false;
                 }
             }
-            function refreshMediaState() {
+            function refreshMediaState(force) {
                 refreshMediaConfig();
                 var snapshot = readMediaSnapshot();
                 var sources = readMediaSources();
@@ -2897,11 +2976,11 @@ Java.perform(function () {
                 installSourceHooks();
                 installHomeSourceHooks();
                 if (bridgeSelected) {
-                    pushNativeSnapshot(false);
-                    if (transition.refreshThirdParty) scheduleNativeRefresh();
+                    pushNativeSnapshot(!!force);
+                    if (transition.refreshThirdParty || force) scheduleNativeRefresh();
                 } else {
                     refreshNativeBluetooth(snapshot);
-                    if (transition.refreshBluetooth) {
+                    if (transition.refreshBluetooth || force) {
                         scheduleNativeBluetoothRefresh();
                     }
                 }
@@ -2917,6 +2996,18 @@ Java.perform(function () {
                     refreshPending = false;
                     try { Java.scheduleOnMainThread(refreshMediaState); } catch (e) {}
                 }, 100);
+            }
+            function scheduleWakeRefresh() {
+                // A process can survive a long suspend while its OEM card/view has lost the
+                // connection to MediaManager. Rebuild on several UI turns; this is bounded and
+                // does not restart the launcher or instrument process.
+                [0, 700, 2200].forEach(function (delay) {
+                    setTimeout(function () {
+                        try {
+                            Java.scheduleOnMainThread(function () { refreshMediaState(true); });
+                        } catch (e) {}
+                    }, delay);
+                });
             }
             function configuredWidgetCsv(key) {
                 if (Object.prototype.hasOwnProperty.call(widgetConfigCache, key)) {
@@ -3013,7 +3104,8 @@ Java.perform(function () {
                                         invalidateWidgetRewriteCache();
                                         installHomeWidgetHooks();
                                     }
-                                    scheduleMediaRefresh();
+                                    if (action === WAKE_REFRESH) scheduleWakeRefresh();
+                                    else scheduleMediaRefresh();
                                 }
                             }
                         }
@@ -3023,6 +3115,7 @@ Java.perform(function () {
                     filter.addAction(NOW_PLAYING);
                     filter.addAction(SOURCES);
                     filter.addAction(RELOAD_ACT);
+                    filter.addAction(WAKE_REFRESH);
                     var sdk = Java.use("android.os.Build$VERSION").SDK_INT.value;
                     if (sdk >= 33) {
                         ctx().registerReceiver.overload("android.content.BroadcastReceiver",

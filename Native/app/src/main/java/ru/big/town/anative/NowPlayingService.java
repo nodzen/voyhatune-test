@@ -68,6 +68,9 @@ public class NowPlayingService extends Service {
     public static final String ACTION_NOW_PLAYING         = "ru.big.town.anative.NOW_PLAYING";
     public static final String ACTION_NOW_PLAYING_SOURCES = "ru.big.town.anative.NOW_PLAYING_SOURCES";
     public static final String ACTION_REQUEST_NOW_PLAYING = "ru.big.town.anative.REQUEST_NOW_PLAYING";
+    /** Sent once per physical wake so long-sleep instrument-card processes rebuild their native view. */
+    public static final String ACTION_INSTRUMENT_WAKE_REFRESH =
+            "ru.big.town.anative.INSTRUMENT_WAKE_REFRESH";
 
     private static final String ART_FILE_NAME = "nowplaying_art.png";
     // All current consumers render the cover at 66–160 dp. Keeping a full-size artwork supplied

@@ -725,6 +725,8 @@ public class SetModesService extends Service {
             Log.w(TAG, "startNowPlayingService: " + e.getMessage());
         }
     };
+    private final Runnable instrumentWakeRefreshRunnable =
+            () -> requestInstrumentWakeRefresh("delayed startup/wake");
     private final Runnable reassertFloatingBackRunnable = this::reassertFloatingBack;
     private final Runnable autoLaunchRunnable = this::maybeAutoLaunchRestoreMode;
     private final Runnable floatingBackEnableRunnable = () ->
@@ -772,6 +774,10 @@ public class SetModesService extends Service {
         // система убила NowPlaying между физическими wake. Named runnable гасит дубли внутри wake.
         mainHandler.removeCallbacks(startNowPlayingRunnable);
         mainHandler.postDelayed(startNowPlayingRunnable, 6000);
+        // After a multi-day suspend the instrument process may be alive but its MediaManager/card
+        // is attached several seconds after Native. Re-announce once after that attachment window.
+        mainHandler.removeCallbacks(instrumentWakeRefreshRunnable);
+        mainHandler.postDelayed(instrumentWakeRefreshRunnable, 2500);
         mainHandler.removeCallbacks(reassertFloatingBackRunnable);
         mainHandler.postDelayed(reassertFloatingBackRunnable, 3000);
         mainHandler.removeCallbacks(autoLaunchRunnable);
@@ -780,6 +786,7 @@ public class SetModesService extends Service {
 
     private void cancelAncillaryWakeTasks() {
         mainHandler.removeCallbacks(startNowPlayingRunnable);
+        mainHandler.removeCallbacks(instrumentWakeRefreshRunnable);
         mainHandler.removeCallbacks(reassertFloatingBackRunnable);
         mainHandler.removeCallbacks(autoLaunchRunnable);
         mainHandler.removeCallbacks(floatingBackEnableRunnable);
@@ -802,10 +809,27 @@ public class SetModesService extends Service {
         }
     }
 
+    /**
+     * The cluster process can remain alive through a multi-day suspend with a stale native card
+     * view. Ask the injected bridge to rebuild its model on the first wake; this is deliberately a
+     * refresh broadcast, not a force-stop/restart of the OEM instrument process.
+     */
+    private void requestInstrumentWakeRefresh(String source) {
+        Intent intent = new Intent(NowPlayingService.ACTION_INSTRUMENT_WAKE_REFRESH);
+        intent.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
+        try {
+            sendBroadcast(intent);
+            Log.i(TAG, "instrument-card wake refresh requested by " + source);
+        } catch (RuntimeException e) {
+            Log.w(TAG, "instrument-card wake refresh failed: " + e.getMessage());
+        }
+    }
+
     private void runWakeSideEffects(String source) {
         if (serviceDestroyed) return;
         if (beginWakeSession()) {
             requestSavedConfigSync("physical wake");
+            requestInstrumentWakeRefresh(source);
             resetWiperColdOnPowerOn();
             forwardPowerOnToTripStats();
             BatteryHeatService.requestPhysicalWake(this);
@@ -842,6 +866,12 @@ public class SetModesService extends Service {
         if (pendingPhysicalWake) {
             pendingPhysicalWake = false;
             runWakeSideEffects("deferred CarPower wake");
+        } else {
+            // Some long-sleep cycles lose the CarPower callback but still deliver SCREEN_ON. The
+            // media bridge refresh is side-effect free and is safe to request on every such edge.
+            requestInstrumentWakeRefresh("SCREEN_ON fallback");
+            mainHandler.removeCallbacks(instrumentWakeRefreshRunnable);
+            mainHandler.postDelayed(instrumentWakeRefreshRunnable, 2500);
         }
     }
 

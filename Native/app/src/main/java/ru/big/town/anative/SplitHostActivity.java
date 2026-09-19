@@ -13,7 +13,9 @@ import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.provider.Settings;
 import android.util.Log;
 import android.view.GestureDetector;
@@ -75,6 +77,12 @@ public class SplitHostActivity extends Activity {
     private static final int SCREEN_LIFT_UP = 2;
     private static final int SCREEN_DOWN_HEIGHT_PX = 560;
     private static final int SCREEN_UP_HEIGHT_PX = 720;
+    /**
+     * H97C does not tolerate two VirtualDisplay configuration changes in the same frame.  Keep a
+     * small gap between pane.resize() calls so a split release cannot make system_server process
+     * two activity/configuration rebuilds concurrently.
+     */
+    private static final long VD_RESIZE_GAP_MS = 180L;
 
     public static final String EXTRA_LEFT     = "leftPkg";
     public static final String EXTRA_RIGHT    = "rightPkg";
@@ -101,6 +109,12 @@ public class SplitHostActivity extends Activity {
     private DisplayManager displayManager;
     private int defaultDpi = 213;
     private boolean touchWarned = false;
+    private boolean touchInjectionResolved = false;
+    private boolean touchInjectionAvailable = false;
+    private Object inputManager;
+    private Method setDisplayIdMethod;
+    private Method injectInputEventMethod;
+    private volatile long lastVdResizeAt = 0L;
     private boolean screenLiftReceiverRegistered;
     private int screenLiftType = SCREEN_LIFT_UP;
 
@@ -149,10 +163,13 @@ public class SplitHostActivity extends Activity {
     private static final long WATCH_GRACE_MS   = 8000;  // столько не трогаем панель после запуска (старт приложения)
     private static final int  WATCH_MAX_RESTARTS = 3;   // предохранитель от бесконечного цикла перезапусков
     private final Handler watchHandler = new Handler(Looper.getMainLooper());
+    /** Binder-side VirtualDisplay.resize must not occupy the activity/main looper. */
+    private HandlerThread resizeThread;
+    private Handler resizeHandler;
     private SplitHostTaskLane taskLane;
     private SplitHostGenerationGate workGate;
     private boolean watchActive;
-    private boolean hostDestroyed;
+    private volatile boolean hostDestroyed;
     /** Survives an onNewIntent delivered before onResume; cleared only by an accepted result. */
     private boolean paneHealthCheckPending;
     private final Runnable watchTick = new Runnable() {
@@ -178,6 +195,9 @@ public class SplitHostActivity extends Activity {
         super.onCreate(savedInstanceState);
         // LIGHT-сборка: VD-сплит-хост отключён (нет Frida/trusted-display) — сразу закрываемся.
         if (!BuildConfig.IS_FULL) { finish(); return; }
+        resizeThread = new HandlerThread("VoyahTune-VdResize");
+        resizeThread.start();
+        resizeHandler = new Handler(resizeThread.getLooper());
         taskLane = SplitHostTaskLane.get(getApplicationContext());
         workGate = new SplitHostGenerationGate(taskLane.registerHost(this));
         activeHost = new WeakReference<>(this);
@@ -486,34 +506,64 @@ public class SplitHostActivity extends Activity {
         pane.pendingHeight = height;
         pane.pendingDpi = dpi;
         if (resetAttempts) pane.resizeAttempts = 0;
-        if (pane.resizeRunnable != null) watchHandler.removeCallbacks(pane.resizeRunnable);
-        pane.resizeRunnable = () -> {
+        Handler queue = resizeQueue();
+        if (pane.resizeRunnable != null) queue.removeCallbacks(pane.resizeRunnable);
+        // Use a self-referencing holder so a pane can yield to the other pane without creating a
+        // second independent resize chain. The latest pending dimensions are read only when the
+        // serialized operation actually reaches the front of the queue.
+        final Runnable[] scheduled = new Runnable[1];
+        scheduled[0] = () -> {
             pane.resizeRunnable = null;
-            if (hostDestroyed || pane.vd == null) return;
-            int targetWidth = pane.pendingWidth;
-            int targetHeight = pane.pendingHeight;
-            int targetDpi = pane.pendingDpi;
-            if (targetWidth <= 0 || targetHeight <= 0
-                    || (pane.vdWidth == targetWidth && pane.vdHeight == targetHeight
-                    && pane.vdDpi == targetDpi)) return;
-            try {
-                pane.vd.resize(targetWidth, targetHeight, targetDpi);
-                pane.vdWidth = targetWidth;
-                pane.vdHeight = targetHeight;
-                pane.vdDpi = targetDpi;
-                pane.resizeVersion++;
-                pane.resizeAttempts = 0;
+            if (hostDestroyed) return;
+            long wait = lastVdResizeAt + VD_RESIZE_GAP_MS - SystemClock.uptimeMillis();
+            if (wait > 0L) {
+                pane.resizeRunnable = scheduled[0];
+                resizeQueue().postDelayed(scheduled[0], wait);
+                return;
+            }
+            int targetWidth;
+            int targetHeight;
+            int targetDpi;
+            boolean resized = false;
+            boolean retry = false;
+            synchronized (pane) {
+                if (hostDestroyed || pane.vd == null) return;
+                targetWidth = pane.pendingWidth;
+                targetHeight = pane.pendingHeight;
+                targetDpi = pane.pendingDpi;
+                if (targetWidth <= 0 || targetHeight <= 0
+                        || (pane.vdWidth == targetWidth && pane.vdHeight == targetHeight
+                        && pane.vdDpi == targetDpi)) return;
+                try {
+                    // This is a synchronous Binder call on some H97C builds. Keep it off the
+                    // activity looper; releasePane uses the same lock for a clean handoff.
+                    VirtualDisplay targetVd = pane.vd;
+                    pane.vd.resize(targetWidth, targetHeight, targetDpi);
+                    if (hostDestroyed || pane.vd != targetVd) return;
+                    lastVdResizeAt = SystemClock.uptimeMillis();
+                    pane.vdWidth = targetWidth;
+                    pane.vdHeight = targetHeight;
+                    pane.vdDpi = targetDpi;
+                    pane.resizeVersion++;
+                    pane.resizeAttempts = 0;
+                    resized = true;
+                } catch (Exception e) {
+                    pane.resizeAttempts++;
+                    retry = pane.resizeAttempts < 4;
+                    Log.w(TAG, "resize " + pane.side + " failed (attempt "
+                            + pane.resizeAttempts + "): " + e.getMessage());
+                }
+            }
+            if (resized) {
                 notifyPaneResized(pane);
                 Log.i(TAG, "resize settled " + pane.side + " " + targetWidth + "x"
                         + targetHeight + " dpi=" + targetDpi);
-            } catch (Exception e) {
-                pane.resizeAttempts++;
-                Log.w(TAG, "resize " + pane.side + " failed (attempt "
-                        + pane.resizeAttempts + "): " + e.getMessage());
-                if (pane.resizeAttempts < 4 && !hostDestroyed) schedulePaneResizeRetry(pane);
+            } else if (retry && !hostDestroyed) {
+                schedulePaneResizeRetry(pane);
             }
         };
-        watchHandler.postDelayed(pane.resizeRunnable, 50L);
+        pane.resizeRunnable = scheduled[0];
+        queue.postDelayed(scheduled[0], 50L);
     }
 
     private void schedulePaneResizeRetry(final Pane pane) {
@@ -522,7 +572,11 @@ public class SplitHostActivity extends Activity {
             if (hostDestroyed || pane.vd == null) return;
             schedulePaneResize(pane, pane.pendingWidth, pane.pendingHeight, pane.pendingDpi, false);
         };
-        watchHandler.postDelayed(pane.resizeRunnable, 120L);
+        resizeQueue().postDelayed(pane.resizeRunnable, 120L);
+    }
+
+    private Handler resizeQueue() {
+        return resizeHandler != null ? resizeHandler : watchHandler;
     }
 
     private void createVirtualDisplay(Pane pane, Surface surface) {
@@ -794,44 +848,69 @@ public class SplitHostActivity extends Activity {
         // с чистого листа. Иначе исчерпанный лимит переезжал бы на другое приложение и надзиратель
         // молча отказывался бы его поднимать.
         pane.restarts = 0;
-        if (pane.vd != null) {
-            try { pane.vd.release(); } catch (Exception ignored) {}
-            pane.vd = null;
-        }
+        Handler queue = resizeQueue();
         if (pane.resizeRunnable != null) {
-            watchHandler.removeCallbacks(pane.resizeRunnable);
-            pane.resizeRunnable = null;
+            queue.removeCallbacks(pane.resizeRunnable);
         }
-        pane.pendingWidth = 0;
-        pane.pendingHeight = 0;
-        pane.pendingDpi = 0;
-        pane.resizeAttempts = 0;
-        pane.vdWidth = 0;
-        pane.vdHeight = 0;
-        pane.vdDpi = 0;
+        VirtualDisplay oldVd;
+        synchronized (pane) {
+            pane.resizeRunnable = null;
+            oldVd = pane.vd;
+            pane.vd = null;
+            pane.pendingWidth = 0;
+            pane.pendingHeight = 0;
+            pane.pendingDpi = 0;
+            pane.resizeAttempts = 0;
+            pane.vdWidth = 0;
+            pane.vdHeight = 0;
+            pane.vdDpi = 0;
+        }
+        if (oldVd != null) {
+            try { oldVd.release(); } catch (Exception ignored) {}
+        }
     }
 
     // -------------------------------------------------------------------------
     // Ввод (инъекция в VirtualDisplay) — hidden API, нужен INJECT_EVENTS (см. шапку класса)
     // -------------------------------------------------------------------------
 
+    private void resolveTouchInjection() {
+        if (touchInjectionResolved) return;
+        touchInjectionResolved = true;
+        try {
+            setDisplayIdMethod = MotionEvent.class.getMethod("setDisplayId", int.class);
+            inputManager = getSystemService("input");
+            if (inputManager == null) throw new IllegalStateException("InputManager unavailable");
+            injectInputEventMethod = inputManager.getClass().getMethod(
+                    "injectInputEvent", InputEvent.class, int.class);
+            touchInjectionAvailable = true;
+        } catch (Throwable e) {
+            touchInjectionAvailable = false;
+            Log.w(TAG, "injectTouch недоступен (методы не найдены): " + e.getMessage()
+                    + " — ввод в VD требует root+Frida-в-system_server или роутинга WM");
+        }
+    }
+
     private void injectTouch(Pane pane, MotionEvent ev) {
+        resolveTouchInjection();
+        if (!touchInjectionAvailable || pane.vd == null || pane.vd.getDisplay() == null) return;
         MotionEvent copy = null;
         try {
             int displayId = pane.vd.getDisplay().getDisplayId();
             copy = MotionEvent.obtain(ev);
-            // MotionEvent.setDisplayId(int) — hidden
-            Method setDisplayId = MotionEvent.class.getMethod("setDisplayId", int.class);
-            setDisplayId.invoke(copy, displayId);
-            // InputManager.injectInputEvent(InputEvent, int) — hidden; 0 = INJECT_INPUT_EVENT_MODE_ASYNC
-            Object im = getSystemService("input");
-            Method inject = im.getClass().getMethod("injectInputEvent", InputEvent.class, int.class);
-            inject.invoke(im, copy, 0);
-        } catch (Exception e) {
+            setDisplayIdMethod.invoke(copy, displayId);
+            // InputManager.injectInputEvent(..., 0) = INJECT_INPUT_EVENT_MODE_ASYNC.
+            injectInputEventMethod.invoke(inputManager, copy, 0);
+        } catch (Throwable e) {
+            // A SecurityException is permanent for this process. Stop reflecting on every MOVE;
+            // the surface still consumes the event and the rest of the host remains responsive.
+            touchInjectionAvailable = false;
             if (!touchWarned) {
                 touchWarned = true;
-                Log.w(TAG, "injectTouch недоступен (нет INJECT_EVENTS у Native): " + e.getMessage()
-                        + " — ввод в VD требует root+Frida-в-system_server или роутинга WM для trusted-дисплея");
+                Throwable cause = e.getCause() == null ? e : e.getCause();
+                Log.w(TAG, "injectTouch недоступен (нет INJECT_EVENTS у Native): "
+                        + cause.getMessage()
+                        + " — ввод в VD требует root+Frida-в-system_server или роутинга WM");
             }
         } finally {
             if (copy != null) copy.recycle();
@@ -1241,12 +1320,11 @@ public class SplitHostActivity extends Activity {
     }
 
     /**
-     * Снимок панели → сразу в МАЛЕНЬКИЙ bitmap (PixelCopy сам масштабирует) → box-blur → в ImageView.
+     * Снимок панели → сразу в МАЛЕНЬКИЙ bitmap (PixelCopy сам масштабирует) → в ImageView.
      *
-     * Именно так уходит «шакальность» прошлой версии: там картинку просто уменьшали и растягивали
-     * обратно, а голый даунскейл без размытия и без фильтрации при растяжении даёт блочные пиксели.
-     * Здесь маленький кадр честно размывается (3 прохода бокса ≈ гаусс — на картинке в ~160px это
-     * доли миллисекунды), а обратно тянется билинейно, так что видно мягкое пятно, а не «квадратики».
+     * Маленький кадр с включённой фильтрацией тянется билинейно. Предыдущая версия дополнительно
+     * делала несколько проходов box-blur прямо в callback PixelCopy на main thread; на H97C это
+     * заметно задерживало обработку MOVE/UP и могло совпасть с началом VD-resize.
      *
      * RenderEffect.createBlurEffect тут недоступен — это API 31, а голова на API 30.
      */
@@ -1266,46 +1344,10 @@ public class SplitHostActivity extends Activity {
                     small.recycle();
                     return;
                 }
-                boxBlur(small, 3);
                 target.setImageBitmap(small);
             }, new android.os.Handler(android.os.Looper.getMainLooper()));
         } catch (Exception e) {
             Log.w(TAG, "captureBlurred " + pane.side + ": " + e.getMessage());
-        }
-    }
-
-    /** Box-blur по маленькому битмапу: несколько проходов приближают гаусс. Радиус в пикселях СНИМКА. */
-    private static void boxBlur(Bitmap bmp, int passes) {
-        final int w = bmp.getWidth(), h = bmp.getHeight();
-        if (w < 3 || h < 3) return;
-        final int r = 2;
-        int[] px = new int[w * h];
-        bmp.getPixels(px, 0, w, 0, 0, w, h);
-        int[] tmp = new int[w * h];
-        for (int p = 0; p < passes; p++) {
-            // Каждый проход размывает ПО СТРОКАМ и пишет результат транспонированным. Два таких
-            // прохода подряд дают горизонталь + вертикаль, причём чтение всегда идёт последовательно
-            // по памяти — отдельная «вертикальная» ветка не нужна.
-            blurPass(px, tmp, w, h, r);
-            blurPass(tmp, px, h, w, r);
-        }
-        bmp.setPixels(px, 0, w, 0, 0, w, h);
-    }
-
-    /** Один проход усреднения по строке шириной w; результат кладётся транспонированным (h×w). */
-    private static void blurPass(int[] src, int[] dst, int w, int h, int r) {
-        for (int y = 0; y < h; y++) {
-            for (int x = 0; x < w; x++) {
-                int a = 0, rr = 0, gg = 0, bb = 0, n = 0;
-                for (int k = -r; k <= r; k++) {
-                    int xx = x + k;
-                    if (xx < 0 || xx >= w) continue;
-                    int c = src[y * w + xx];
-                    a += (c >>> 24); rr += (c >> 16) & 0xFF; gg += (c >> 8) & 0xFF; bb += c & 0xFF;
-                    n++;
-                }
-                dst[x * h + y] = ((a / n) << 24) | ((rr / n) << 16) | ((gg / n) << 8) | (bb / n);
-            }
         }
     }
 
@@ -1399,6 +1441,7 @@ public class SplitHostActivity extends Activity {
         cancelResizeGesture();
         releasePane(left);
         releasePane(right);
+        stopResizeThread();
         if (screenLiftReceiverRegistered) {
             try {
                 unregisterReceiver(screenLiftReceiver);
@@ -1407,6 +1450,15 @@ public class SplitHostActivity extends Activity {
             screenLiftReceiverRegistered = false;
         }
         super.onDestroy();
+    }
+
+    private void stopResizeThread() {
+        Handler queue = resizeHandler;
+        resizeHandler = null;
+        if (queue != null) queue.removeCallbacksAndMessages(null);
+        HandlerThread thread = resizeThread;
+        resizeThread = null;
+        if (thread != null) thread.quitSafely();
     }
 
     /**

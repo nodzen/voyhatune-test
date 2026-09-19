@@ -1,6 +1,7 @@
 package ru.big.town.restoremode;
 
 import android.content.BroadcastReceiver;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
@@ -103,7 +104,7 @@ public class AdvanceActivity extends AppCompatActivity {
     private QuickActionsController quickActions;
 
     // Автосвет (перенесён в «Комфорт»)
-    private RadioGroup autoLightGroup;
+    private Switch autoLightSwitch;
     private TextView textSensorLevel;
 
     // Сообщения в SetModesService через lifecycle-owned NativeServiceClient.
@@ -119,6 +120,9 @@ public class AdvanceActivity extends AppCompatActivity {
     static final int MSG_SET_THEME          = 28;
     static final int MSG_APPLY_FORCED_EV    = 35;
     private static final String NATIVE_PACKAGE = "ru.big.town.anative";
+    private static final int MSG_APPLY_PEDESTRIAN = 21;
+    private static final String MODES_PROVIDER =
+            "content://ru.big.town.restoremode.restoremodecontentprovider/";
     private static final String ACTION_DOOR_MEDIA_PAUSE_CHANGED =
             "ru.big.town.anative.DOOR_MEDIA_PAUSE_CHANGED";
     private static final String ACTION_DOOR_MEDIA_RESUME_CHANGED =
@@ -175,6 +179,8 @@ public class AdvanceActivity extends AppCompatActivity {
     // Кнопка руля может переключить бинарные настройки, пока этот экран открыт. Обновляем контролы
     // без повторной отправки CAN-команды из их OnCheckedChangeListener.
     private boolean syncingSettingUi;
+    private long pedestrianRequestGeneration;
+    private long forcedEvRequestGeneration;
     private final BroadcastReceiver settingSyncReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -185,11 +191,11 @@ public class AdvanceActivity extends AppCompatActivity {
             syncingSettingUi = true;
             try {
                 if ("forcedEv".equals(key)) {
-                    RadioGroup group = findViewById(R.id.forcedEvGroup);
-                    if (group != null) group.check(value ? R.id.forcedEvOn : R.id.forcedEvOff);
+                    Switch toggle = findViewById(R.id.switchForcedEv);
+                    if (toggle != null) toggle.setChecked(value);
                 } else if ("disablePedestrianSound".equals(key)) {
-                    RadioGroup group = findViewById(R.id.pedestrianSoundGroup);
-                    if (group != null) group.check(value ? R.id.pedestrianSoundOn : R.id.pedestrianSoundOff);
+                    Switch toggle = findViewById(R.id.switchPedestrianSound);
+                    if (toggle != null) toggle.setChecked(!value);
                 }
             } finally {
                 syncingSettingUi = false;
@@ -311,8 +317,10 @@ public class AdvanceActivity extends AppCompatActivity {
         nativeService = new NativeServiceClient(this);
         nativeService.connect();
 
-        View quickPage = findViewById(R.id.pageMainScreen);
-        quickActions = new QuickActionsController(this, quickPage, prefs, nativeService);
+        // QuickActionsController also owns the app-shortcut grid. Keep its root at the activity
+        // level so the grid can live in «Приложения и разделение экрана» without coupling the
+        // controller to one navigation page.
+        quickActions = new QuickActionsController(this, findViewById(R.id.main), prefs, nativeService);
 
         buttonApplyAdvance   = findViewById(R.id.buttonApplyAdvance);
         applyProgressAdvance = findViewById(R.id.applyProgressAdvance);
@@ -2191,14 +2199,15 @@ public class AdvanceActivity extends AppCompatActivity {
 
     /** Сегмент-контрол «Предупреждение пешеходов» (Со звуком/Без звука). Перенесён с главного. */
     private void initPedestrianSoundGroup() {
-        RadioGroup group = findViewById(R.id.pedestrianSoundGroup);
-        if (group == null) return;
+        Switch toggle = findViewById(R.id.switchPedestrianSound);
+        if (toggle == null) return;
         boolean disabled = prefs.getBoolean("disablePedestrianSound", false);
-        group.check(disabled ? R.id.pedestrianSoundOn : R.id.pedestrianSoundOff);
-        group.setOnCheckedChangeListener((g, checkedId) -> {
+        toggle.setChecked(!disabled);
+        toggle.setOnCheckedChangeListener((button, checked) -> {
             if (syncingSettingUi) return;
-            boolean off = (checkedId == R.id.pedestrianSoundOn);
-            prefs.edit().putBoolean("disablePedestrianSound", off).apply();
+            boolean off = !checked;
+            persistVehicleBoolean("disablePedestrianSound", off);
+            sendPedestrianSound(off);
             Log.i("$$$ Advance pedestrian $$$", off ? "DISABLED (muted)" : "ENABLED");
         });
     }
@@ -2208,26 +2217,64 @@ public class AdvanceActivity extends AppCompatActivity {
      * это режим тяги, пользователь ждёт немедленного эффекта, а не после «Применить».
      */
     private void initForcedEvGroup() {
-        RadioGroup group = findViewById(R.id.forcedEvGroup);
-        if (group == null) return;
+        Switch toggle = findViewById(R.id.switchForcedEv);
+        if (toggle == null) return;
         boolean on = prefs.getBoolean("forcedEv", false);
-        group.check(on ? R.id.forcedEvOn : R.id.forcedEvOff);
-        group.setOnCheckedChangeListener((g, checkedId) -> {
+        toggle.setChecked(on);
+        toggle.setOnCheckedChangeListener((button, enabled) -> {
             if (syncingSettingUi) return;
-            boolean enabled = (checkedId == R.id.forcedEvOn);
-            prefs.edit().putBoolean("forcedEv", enabled).apply();
+            persistVehicleBoolean("forcedEv", enabled);
             sendForcedEv(enabled);
             Log.i("$$$ Advance forcedEV $$$", enabled ? "ON" : "OFF");
         });
     }
 
-    /** Немедленно применить форсированный EV через SetModesService. */
-    private void sendForcedEv(boolean on) {
-        if (!nativeService.isConnected()) {
-            Log.w("$$$ Advance forcedEV $$$", "SetModesService не забинден");
-            return;
+    /** Записываем бинарную настройку в тот же provider, из которого Native восстанавливает машину. */
+    private void persistVehicleBoolean(String key, boolean value) {
+        prefs.edit().putBoolean(key, value).apply();
+        try {
+            ContentValues values = new ContentValues();
+            values.put(key, value);
+            int updated = getContentResolver().update(android.net.Uri.parse(MODES_PROVIDER), values,
+                    null, null);
+            if (updated <= 0) {
+                Log.w("$$$ Advance settings $$$", "Provider не подтвердил запись " + key);
+            }
+        } catch (RuntimeException e) {
+            Log.w("$$$ Advance settings $$$", "Provider update " + key + " failed: " + e.getMessage());
         }
-        nativeService.send(MSG_APPLY_FORCED_EV, on ? 1 : 0);
+    }
+
+    /** Команда может быть нажата сразу после открытия Activity, пока Binder ещё подключается. */
+    private void sendPedestrianSound(boolean disabled) {
+        final long generation = ++pedestrianRequestGeneration;
+        sendPedestrianSound(disabled, generation, 0);
+    }
+
+    private void sendPedestrianSound(boolean disabled, long generation, int attempt) {
+        if (generation != pedestrianRequestGeneration) return;
+        if (nativeService.send(MSG_APPLY_PEDESTRIAN, disabled ? 1 : 0)) return;
+        if (attempt < 7) {
+            uiHandler.postDelayed(() -> sendPedestrianSound(disabled, generation, attempt + 1), 300L);
+        } else {
+            Log.w("$$$ Advance pedestrian $$$", "SetModesService не подключился; настройка сохранена");
+        }
+    }
+
+    /** Немедленно применить форсированный EV через SetModesService с коротким Binder-retry. */
+    private void sendForcedEv(boolean on) {
+        final long generation = ++forcedEvRequestGeneration;
+        sendForcedEv(on, generation, 0);
+    }
+
+    private void sendForcedEv(boolean on, long generation, int attempt) {
+        if (generation != forcedEvRequestGeneration) return;
+        if (nativeService.send(MSG_APPLY_FORCED_EV, on ? 1 : 0)) return;
+        if (attempt < 7) {
+            uiHandler.postDelayed(() -> sendForcedEv(on, generation, attempt + 1), 300L);
+        } else {
+            Log.w("$$$ Advance forcedEV $$$", "SetModesService не подключился; настройка сохранена");
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -2341,6 +2388,8 @@ public class AdvanceActivity extends AppCompatActivity {
     }
 
     private void applyFragranceEnabled(boolean enabled) {
+        View details = findViewById(R.id.fragranceDetails);
+        if (details != null) details.setVisibility(enabled ? View.VISIBLE : View.GONE);
         applyModeToggle(R.id.fragranceTasteGroup, enabled);
         applyModeToggle(R.id.fragranceDurationGroup, enabled);
         applyModeToggle(R.id.fragranceIntensityGroup, enabled);
@@ -2362,14 +2411,13 @@ public class AdvanceActivity extends AppCompatActivity {
     // -------------------------------------------------------------------------
 
     private void initAutoLight() {
-        autoLightGroup  = findViewById(R.id.autoLightGroup);
+        autoLightSwitch = findViewById(R.id.switchAutoLight);
         textSensorLevel = findViewById(R.id.textSensorLevel);
-        if (autoLightGroup == null) return;
+        if (autoLightSwitch == null) return;
 
         boolean on = prefs.getBoolean("autoLight", false);
-        autoLightGroup.check(on ? R.id.autoLightOn : R.id.autoLightOff);
-        autoLightGroup.setOnCheckedChangeListener((group, checkedId) -> {
-            boolean enabled = (checkedId == R.id.autoLightOn);
+        autoLightSwitch.setChecked(on);
+        autoLightSwitch.setOnCheckedChangeListener((button, enabled) -> {
             prefs.edit().putBoolean("autoLight", enabled).apply();
             sendAutoLightMessage(enabled);
             if (!enabled && textSensorLevel != null) textSensorLevel.setText("Датчик: —");
