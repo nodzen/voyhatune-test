@@ -5,9 +5,11 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.SystemClock;
 import android.util.Log;
 
 import java.util.LinkedHashMap;
+import java.util.Collections;
 import java.util.Map;
 
 /** Stateless entry points and the latest persisted vehicle-mode snapshot used by Native services. */
@@ -480,6 +482,58 @@ final class VehicleCommandFacade {
     }
 
     /**
+     * TX58 is accepted by the OEM Binder before the physical VSP CAN write is observable. The
+     * stock implementation keeps firing this small independent command until TX57 reports the
+     * requested state. Keep the retry bounded and run it only on the Native command worker so the
+     * launcher/UI thread is never held while CanBusService wakes up.
+     */
+    public static boolean sendPedestrianSoundCommandWithRetry(boolean disabled) {
+        final Context context = GlobalVars.SAVE_CONTEXT;
+        if (context == null) {
+            Log.w("$$$ PedestrianSound $$$", "no Native context");
+            return false;
+        }
+        final OemVehicleStateTransport.StateKey key =
+                new OemVehicleStateTransport.StateKey(
+                        VehicleRestorePolicy.PEDESTRIAN_SOUND,
+                        VehicleRestorePolicy.PEDESTRIAN_SOUND_ID);
+        final int desired = VehicleRestorePolicy.pedestrianSoundState(disabled);
+        boolean accepted = false;
+        boolean sentAny = false;
+        final int maxAttempts = 8;
+        for (int attempt = 0; attempt < maxAttempts; attempt++) {
+            Integer current = null;
+            try {
+                Map<OemVehicleStateTransport.StateKey, Integer> states =
+                        OemVehicleStateTransport.readVehicleStates(
+                                context, Collections.singleton(key));
+                if (states != null) current = states.get(key);
+            } catch (RuntimeException e) {
+                Log.w("$$$ PedestrianSound $$$",
+                        "TX57 read failed attempt=" + attempt + ": " + e.getMessage());
+            }
+
+            // Always submit at least one write. A stale cached read must not make a newly toggled
+            // setting look successful without touching the OEM setter.
+            if (sentAny && current != null && current == desired) {
+                Log.i("$$$ PedestrianSound $$$", "verified state=" + current
+                        + " desired=" + desired + " attempt=" + attempt);
+                return true;
+            }
+
+            boolean sent = sendPedestrianSoundCommand(disabled);
+            sentAny = true;
+            accepted |= sent;
+            Log.i("$$$ PedestrianSound $$$", "attempt=" + attempt
+                    + " read=" + current + " desired=" + desired + " tx58=" + sent);
+            if (attempt + 1 < maxAttempts) SystemClock.sleep(750L);
+        }
+        Log.w("$$$ PedestrianSound $$$", "bounded retry finished accepted=" + accepted
+                + " desired=" + desired);
+        return accepted;
+    }
+
+    /**
      * Старт/стоп {@link WiperColdService} — сервиса-реактора на открытие двери водителя. У него теперь
      * два независимых потребителя сигнала двери: «Сервисный режим дворников» ({@code wiperCold}) и
      * «Пауза музыки при открытии двери» ({@code pauseMediaOnDoor}). Оба флага дублируем в NativePrefs —
@@ -586,12 +640,7 @@ final class VehicleCommandFacade {
         final boolean pedestrianDisabled = disablePedestrianSound;
         plan.addOperation(
                 "pedestrian sound mode " + (pedestrianDisabled ? "off" : "on"),
-                () -> OemVehicleStateTransport.sendVehicleState(
-                        context,
-                        VehicleRestorePolicy.PEDESTRIAN_SOUND,
-                        VehicleRestorePolicy.PEDESTRIAN_SOUND_ID,
-                        VehicleRestorePolicy.pedestrianSoundState(pedestrianDisabled),
-                        "pedestrian sound restore").accepted()
+                () -> sendPedestrianSoundCommandWithRetry(pedestrianDisabled)
                         ? CanRestorePlan.OperationResult.ACCEPTED_UNCONFIRMED
                         : CanRestorePlan.OperationResult.TRANSIENT_FAILURE,
                 repeatOemOnNextPass);

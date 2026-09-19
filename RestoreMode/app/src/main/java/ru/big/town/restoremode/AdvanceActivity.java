@@ -721,10 +721,16 @@ public class AdvanceActivity extends AppCompatActivity {
         applying = on;
         if (buttonApplyAdvance != null) buttonApplyAdvance.setEnabled(!on);
         if (applyProgressAdvance != null) {
-            applyProgressAdvance.setVisibility(on ? View.VISIBLE : View.GONE);
+            applyProgressAdvance.setVisibility(on && sectionNeedsApply(currentSection)
+                    ? View.VISIBLE : View.GONE);
         }
         uiHandler.removeCallbacks(applyTimeout);
         if (on) uiHandler.postDelayed(applyTimeout, 12000); // страховка, если MSG_RESULT не придёт
+    }
+
+    /** Быстрые действия и остальные event-driven разделы не запускают общий CAN-применитель. */
+    private static boolean sectionNeedsApply(int index) {
+        return index == 1 || index == 3 || index == 4;
     }
 
     private void initMediaAndHomeWidgetSettings() {
@@ -1666,10 +1672,11 @@ public class AdvanceActivity extends AppCompatActivity {
         if (navOther != null)            navOther.setSelected(index == 6);
 
         if (buttonApplyAdvance != null) {
-            buttonApplyAdvance.setVisibility(View.VISIBLE);
+            buttonApplyAdvance.setVisibility(sectionNeedsApply(index) ? View.VISIBLE : View.GONE);
         }
         if (applyProgressAdvance != null) {
-            applyProgressAdvance.setVisibility(applying ? View.VISIBLE : View.GONE);
+            applyProgressAdvance.setVisibility(applying && sectionNeedsApply(index)
+                    ? View.VISIBLE : View.GONE);
         }
         if (quickActions != null) {
             if (activityResumed && index == 0) quickActions.start();

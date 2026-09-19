@@ -138,4 +138,117 @@
         android:textColor="#B8BEC8"
         android:textSize="17sp" />
 
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="22dp"
+        android:text="Медиа и быстрый доступ"
+        android:textColor="#FFFFFF"
+        android:textSize="24sp"
+        android:textStyle="bold" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:background="@drawable/layout_category_bg"
+        android:orientation="vertical"
+        android:padding="14dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Управление медиа применяется сразу"
+            android:textColor="#9AA0AA"
+            android:textSize="16sp" />
+
+        <Switch
+            android:id="@+id/switchHomeThirdPartyMedia"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Показывать Spotify, Яндекс.Музыку и другие MediaSession"
+            android:textColor="#FFFFFF"
+            android:textSize="19sp" />
+
+        <Switch
+            android:id="@+id/switchSaveTripHistory"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Сохранять историю поездок"
+            android:textColor="#FFFFFF"
+            android:textSize="19sp" />
+
+        <Button
+            android:id="@+id/buttonChooseMediaSource"
+            android:layout_width="match_parent"
+            android:layout_height="60dp"
+            android:layout_marginTop="8dp"
+            android:backgroundTint="#373f4a"
+            android:text="Выбрать источник музыки"
+            android:textColor="#FFFFFF"
+            app:cornerRadius="16dp" />
+
+        <Button
+            android:id="@+id/buttonConfigureHomeWidgets"
+            android:layout_width="match_parent"
+            android:layout_height="60dp"
+            android:layout_marginTop="8dp"
+            android:backgroundTint="#373f4a"
+            android:text="Настроить штатные виджеты"
+            android:textColor="#FFFFFF"
+            app:cornerRadius="16dp" />
+    </LinearLayout>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="22dp"
+        android:text="Сохранённые режимы"
+        android:textColor="#FFFFFF"
+        android:textSize="24sp"
+        android:textStyle="bold" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:background="@drawable/layout_category_bg"
+        android:orientation="vertical"
+        android:padding="14dp">
+
+        <Switch
+            android:id="@+id/switchRememberDriveMode"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:checked="true"
+            android:text="Запоминать режим езды"
+            android:textColor="#FFFFFF"
+            android:textSize="19sp"
+            android:thumb="@drawable/switch_thumb"
+            android:track="@drawable/switch_track" />
+
+        <Switch
+            android:id="@+id/switchRememberEnergyMode"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:checked="true"
+            android:text="Запоминать режим энергии"
+            android:textColor="#FFFFFF"
+            android:textSize="19sp"
+            android:thumb="@drawable/switch_thumb"
+            android:track="@drawable/switch_track" />
+
+        <Switch
+            android:id="@+id/switchRememberRecycleMode"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:checked="true"
+            android:text="Запоминать рекуперацию"
+            android:textColor="#FFFFFF"
+            android:textSize="19sp"
+            android:thumb="@drawable/switch_thumb"
+            android:track="@drawable/switch_track" />
+    </LinearLayout>
+
 </LinearLayout>

@@ -15,6 +15,7 @@ NATIVE_FACADE="$REPO_ROOT/Native/app/src/main/java/ru/big/town/anative/VehicleCo
 ADVANCE="$REPO_ROOT/RestoreMode/app/src/main/java/ru/big/town/restoremode/AdvanceActivity.java"
 PROVIDER="$REPO_ROOT/RestoreMode/app/src/main/java/ru/big/town/restoremode/RestoreModeContentProvider.java"
 ADVANCE_LAYOUT="$REPO_ROOT/RestoreMode/app/src/main/res/layout/activity_advance.xml"
+QUICK_LAYOUT="$REPO_ROOT/RestoreMode/app/src/main/res/layout/page_quick_actions.xml"
 
 fail() {
     echo "FAIL: $*" >&2
@@ -54,8 +55,12 @@ for label in \
     'android:id="@+id/switchRememberDriveMode"' \
     'android:id="@+id/switchRememberEnergyMode"' \
     'android:id="@+id/switchRememberRecycleMode"'; do
-    [ "$(grep -F -c -- "$label" "$ADVANCE_LAYOUT")" -eq 1 ] \
-        || fail "remember switch must be shown exactly once: $label"
+    total=0
+    for layout in "$ADVANCE_LAYOUT" "$QUICK_LAYOUT"; do
+        count=$(grep -F -c -- "$label" "$layout" || true)
+        total=$((total + count))
+    done
+    [ "$total" -eq 1 ] || fail "remember switch must be shown exactly once: $label"
 done
 for old_id in switchDriveMode switchEnergy switchRecycle switchRememberModes checkBox34 \
     drive_modes_group energy_modes_group recycle_modes_group; do

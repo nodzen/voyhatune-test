@@ -72,14 +72,21 @@ public class SetModesConfigReceiver extends BroadcastReceiver {
             BackButtonService.setSteeringBackEnabled(context, needsBackService);
             Log.i(TAG, "STEER_CONFIG зеркалирован");
         } else if ("ru.big.town.anative.DOCK_CONFIG".equals(action)) {
-            SetModesReceiverDynamic.mirrorDock(context, intent, 1);
-            SetModesReceiverDynamic.mirrorDock(context, intent, 2);
+            // Opening RestoreMode republishes the complete snapshot. Do not wake the launcher
+            // unless at least one effective dock value changed: DOCK_RELOAD rebuilds both navbars
+            // and the media widgets and was the main source of the exit/apply hitch.
+            boolean changed = SetModesReceiverDynamic.mirrorDock(context, intent, 1);
+            changed |= SetModesReceiverDynamic.mirrorDock(context, intent, 2);
             SetModesReceiverDynamic.clearLegacyPassengerDock(context);
-            Intent reload = new Intent("ru.big.town.anative.DOCK_RELOAD");
-            reload.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
-            context.sendBroadcast(reload);
-            SetModesReceiverDynamic.sendWinReload(context);
-            Log.i(TAG, "DOCK_CONFIG зеркалирован + reload");
+            if (changed) {
+                Intent reload = new Intent("ru.big.town.anative.DOCK_RELOAD");
+                reload.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
+                context.sendBroadcast(reload);
+                SetModesReceiverDynamic.sendWinReload(context);
+                Log.i(TAG, "DOCK_CONFIG зеркалирован + reload (изменён)");
+            } else {
+                Log.i(TAG, "DOCK_CONFIG без изменений — reload не нужен");
+            }
         } else if ("ru.big.town.anative.FROZEN_APPS_CONFIG".equals(action)) {
             SetModesReceiverDynamic.mirrorFrozenApps(context, intent);
             Intent reload = new Intent("ru.big.town.anative.DOCK_RELOAD");
@@ -173,23 +180,37 @@ public class SetModesConfigReceiver extends BroadcastReceiver {
     private static void applyHomeWidgetConfig(Context context, Intent intent) {
         android.content.ContentResolver resolver = context.getContentResolver();
         String[] regions = {"left_small", "left_big", "right_small", "right_big"};
+        boolean changed = false;
         for (String region : regions) {
             String value = intent.getStringExtra("homeWidgets_" + region);
             if (value == null) value = "";
             // The launcher hook accepts only the small operation alphabet and treats empty as
             // factory order. The receiver keeps the transport bounded and never stores arbitrary
             // JSON from the UI process.
-            Settings.Global.putString(resolver, "voyahtune_home_widgets_" + region,
-                    sanitizeWidgetCsv(value));
+            String normalized = sanitizeWidgetCsv(value);
+            String previous = Settings.Global.getString(
+                    resolver, "voyahtune_home_widgets_" + region);
+            changed |= !normalized.equals(previous);
+            Settings.Global.putString(resolver, "voyahtune_home_widgets_" + region, normalized);
         }
-        Settings.Global.putInt(resolver, "voyahtune_instrument_now_playing",
-                intent.getBooleanExtra("instrumentNowPlaying", true) ? 1 : 0);
-        Settings.Global.putInt(resolver, "voyahtune_home_third_party_media",
-                intent.getBooleanExtra("homeThirdPartyMedia", true) ? 1 : 0);
-        Intent reload = new Intent("ru.big.town.anative.DOCK_RELOAD");
-        reload.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
-        context.sendBroadcast(reload);
-        Log.i(TAG, "HOME_WIDGETS_CONFIG применён + launcher/instrument reload");
+        String instrumentNowPlaying = intent.getBooleanExtra("instrumentNowPlaying", true)
+                ? "1" : "0";
+        String homeThirdPartyMedia = intent.getBooleanExtra("homeThirdPartyMedia", true)
+                ? "1" : "0";
+        changed |= !instrumentNowPlaying.equals(Settings.Global.getString(
+                resolver, "voyahtune_instrument_now_playing"));
+        changed |= !homeThirdPartyMedia.equals(Settings.Global.getString(
+                resolver, "voyahtune_home_third_party_media"));
+        Settings.Global.putString(resolver, "voyahtune_instrument_now_playing", instrumentNowPlaying);
+        Settings.Global.putString(resolver, "voyahtune_home_third_party_media", homeThirdPartyMedia);
+        if (changed) {
+            Intent reload = new Intent("ru.big.town.anative.DOCK_RELOAD");
+            reload.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
+            context.sendBroadcast(reload);
+            Log.i(TAG, "HOME_WIDGETS_CONFIG применён + launcher/instrument reload (изменён)");
+        } else {
+            Log.i(TAG, "HOME_WIDGETS_CONFIG без изменений — reload не нужен");
+        }
     }
 
     private static String sanitizeWidgetCsv(String value) {

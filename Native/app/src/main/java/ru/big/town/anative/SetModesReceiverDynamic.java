@@ -206,44 +206,59 @@ public class SetModesReceiverDynamic extends BroadcastReceiver {
 
     /** Записать выбор слота дока в Settings.Global: voyahtune_dock&lt;slot&gt; (pkg) + voyahtune_dock&lt;slot&gt;Dpi (int).
      *  Нужен WRITE_SECURE_SETTINGS (уже в privapp-whitelist, раз mirrorSteer работает). Читает launcherdock.js. */
-    static void mirrorDock(Context ctx, Intent intent, int slot) {
+    static boolean mirrorDock(Context ctx, Intent intent, int slot) {
         String pkg = intent.getStringExtra("dock" + slot);
         if (pkg == null || pkg.isEmpty()) pkg = "none";
         int dpi = intent.getIntExtra("dock" + slot + "Dpi", 0);
+        boolean changed = false;
         try {
             android.content.ContentResolver cr = ctx.getContentResolver();
-            android.provider.Settings.Global.putString(cr, "voyahtune_dock" + slot, pkg);
-            android.provider.Settings.Global.putString(cr, "voyahtune_dock" + slot + "Dpi", String.valueOf(dpi));
+            changed |= mirrorGlobal(cr, "voyahtune_dock" + slot, pkg);
+            changed |= mirrorGlobal(cr, "voyahtune_dock" + slot + "Dpi", String.valueOf(dpi));
             // Per-package DPI остаётся для VD split-панелей: 0 тоже обязательно зеркалируем. Иначе
             // после выбора «Авто» в Settings.Global навсегда оставалось старое ненулевое значение.
             if (!"none".equals(pkg)) {
-                android.provider.Settings.Global.putString(cr, "voyahtune_dpi_" + pkg, String.valueOf(dpi));
+                changed |= mirrorGlobal(cr, "voyahtune_dpi_" + pkg, String.valueOf(dpi));
             }
             String longAction = intent.getStringExtra("dock" + slot + "Long");
             if (longAction == null || longAction.trim().isEmpty()) longAction = "none";
-            android.provider.Settings.Global.putString(cr, "voyahtune_dock" + slot + "Long", longAction);
+            changed |= mirrorGlobal(cr, "voyahtune_dock" + slot + "Long", longAction);
             // Сплит, открываемый долгим нажатием на слот дока. Флаг HasSplit читает launcherdock.js
             // (гейт долгого тапа), детали (L/R/Ratio/Dpi) — обработчик OPEN_DOCK_SPLIT ниже.
             boolean hasSplit = intent.getBooleanExtra("dock" + slot + "HasSplit", false);
-            android.provider.Settings.Global.putString(cr, "voyahtune_dock" + slot + "HasSplit", hasSplit ? "1" : "0");
+            changed |= mirrorGlobal(cr, "voyahtune_dock" + slot + "HasSplit", hasSplit ? "1" : "0");
             if (hasSplit) {
-                android.provider.Settings.Global.putString(cr, "voyahtune_dock" + slot + "SplitL", nz(intent.getStringExtra("dock" + slot + "SplitL")));
-                android.provider.Settings.Global.putString(cr, "voyahtune_dock" + slot + "SplitR", nz(intent.getStringExtra("dock" + slot + "SplitR")));
-                android.provider.Settings.Global.putString(cr, "voyahtune_dock" + slot + "SplitRatio", String.valueOf(intent.getIntExtra("dock" + slot + "SplitRatio", 1)));
-                android.provider.Settings.Global.putString(cr, "voyahtune_dock" + slot + "SplitLDpi", String.valueOf(intent.getIntExtra("dock" + slot + "SplitLDpi", 0)));
-                android.provider.Settings.Global.putString(cr, "voyahtune_dock" + slot + "SplitRDpi", String.valueOf(intent.getIntExtra("dock" + slot + "SplitRDpi", 0)));
-                android.provider.Settings.Global.putString(cr, "voyahtune_dock" + slot + "SplitResizable",
+                changed |= mirrorGlobal(cr, "voyahtune_dock" + slot + "SplitL",
+                        nz(intent.getStringExtra("dock" + slot + "SplitL")));
+                changed |= mirrorGlobal(cr, "voyahtune_dock" + slot + "SplitR",
+                        nz(intent.getStringExtra("dock" + slot + "SplitR")));
+                changed |= mirrorGlobal(cr, "voyahtune_dock" + slot + "SplitRatio",
+                        String.valueOf(intent.getIntExtra("dock" + slot + "SplitRatio", 1)));
+                changed |= mirrorGlobal(cr, "voyahtune_dock" + slot + "SplitLDpi",
+                        String.valueOf(intent.getIntExtra("dock" + slot + "SplitLDpi", 0)));
+                changed |= mirrorGlobal(cr, "voyahtune_dock" + slot + "SplitRDpi",
+                        String.valueOf(intent.getIntExtra("dock" + slot + "SplitRDpi", 0)));
+                changed |= mirrorGlobal(cr, "voyahtune_dock" + slot + "SplitResizable",
                         intent.getBooleanExtra("dock" + slot + "SplitResizable", false) ? "1" : "0");
-                android.provider.Settings.Global.putString(cr, "voyahtune_dock" + slot + "SplitFraction",
+                changed |= mirrorGlobal(cr, "voyahtune_dock" + slot + "SplitFraction",
                         String.valueOf(intent.getFloatExtra("dock" + slot + "SplitFraction", 0f)));
-                android.provider.Settings.Global.putString(cr, "voyahtune_dock" + slot + "SplitPresetIdx",
+                changed |= mirrorGlobal(cr, "voyahtune_dock" + slot + "SplitPresetIdx",
                         String.valueOf(intent.getIntExtra("dock" + slot + "SplitPresetIdx", -1)));
-                android.provider.Settings.Global.putString(cr, "voyahtune_dock" + slot + "SplitPresetId",
+                changed |= mirrorGlobal(cr, "voyahtune_dock" + slot + "SplitPresetId",
                         nz(intent.getStringExtra("dock" + slot + "SplitPresetId")));
             }
         } catch (Exception e) {
             Log.w(TAG, "mirrorDock " + slot + ": " + e.getMessage());
         }
+        return changed;
+    }
+
+    private static boolean mirrorGlobal(android.content.ContentResolver resolver,
+                                        String key, String value) {
+        String previous = android.provider.Settings.Global.getString(resolver, key);
+        boolean changed = !value.equals(previous);
+        android.provider.Settings.Global.putString(resolver, key, value);
+        return changed;
     }
 
     /**

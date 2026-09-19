@@ -171,8 +171,11 @@ public class SetModesService extends Service {
                 case MSG_APPLY_PEDESTRIAN:
                     Log.i(TAG, "handleMessage() MSG_APPLY_PEDESTRIAN arg1=" + msg.arg1);
                     final boolean pedestrianDisabled = msg.arg1 == 1;
-                    ApplyEngine.postUserCommand("pedestrian sound",
-                            () -> VehicleCommandFacade.sendPedestrianSoundCommand(pedestrianDisabled));
+                    // This setting is independent from the saved drive-mode restore. Do not
+                    // cancel a running mode apply just because the user changed the sound toggle.
+                    ApplyEngine.postIndependentUserCommand("pedestrian sound",
+                            () -> VehicleCommandFacade.sendPedestrianSoundCommandWithRetry(
+                                    pedestrianDisabled));
                     break;
 
                 case MSG_APPLY_FORCED_EV:
