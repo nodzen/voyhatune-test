@@ -1,5 +1,6 @@
 package ru.big.town.anative;
 
+import android.annotation.SuppressLint;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
@@ -29,6 +30,7 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import androidx.core.app.NotificationCompat;
+import androidx.core.content.ContextCompat;
 
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Method;
@@ -108,7 +110,9 @@ public final class MediaWidgetOverlayService extends Service implements VirtualD
         filter.addAction(TripStatsService.ACTION_TRIP_UPDATE);
         filter.addAction(BatteryHeatService.ACTION_BATTERY_HEAT_UPDATE);
         filter.addAction(SetModesService.ACTION_POWER_HOLD_STATUS_UPDATE);
-        registerReceiver(stateReceiver, filter);
+        ContextCompat.registerReceiver(this, stateReceiver, filter,
+                "ru.big.town.anative.permission.BIND_SET_MODES_SERVICE", null,
+                ContextCompat.RECEIVER_EXPORTED);
         main.post(tripTicker);
         requestState();
     }
@@ -275,6 +279,7 @@ public final class MediaWidgetOverlayService extends Service implements VirtualD
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
     }
 
+    @SuppressLint("WrongConstant") // Includes privileged Android 11 TRUSTED display flag (1024).
     private void createAppDisplay(WidgetCardPolicy.Card card, SurfaceTexture texture, int w, int h) {
         if (!geometryVisible || !currentKind("app") || w <= 0 || h <= 0) return;
         appSurface = new Surface(texture);

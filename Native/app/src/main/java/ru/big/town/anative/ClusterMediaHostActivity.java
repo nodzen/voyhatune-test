@@ -1,5 +1,6 @@
 package ru.big.town.anative;
 
+import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.graphics.SurfaceTexture;
 import android.hardware.display.DisplayManager;
@@ -90,6 +91,7 @@ public final class ClusterMediaHostActivity extends Activity implements VirtualD
         });
     }
 
+    @SuppressLint("WrongConstant") // Includes privileged Android 11 TRUSTED display flag (1024).
     private void createDisplay(SurfaceTexture texture, int width, int height) {
         if (isFinishing() || isDestroyed() || geometry == null || width <= 0 || height <= 0) return;
         releaseDisplay();

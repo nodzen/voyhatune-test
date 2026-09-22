@@ -47,6 +47,8 @@ require "$DOCK" 'var result = dispatch.call(this, event);'
 require "$DOCK" 'return result;'
 require "$WIDGETS" 'removeOverlay(); // OEM card regains its window and all touch/media events.'
 require "$WIDGETS" 'VirtualDisplayLease.acquire(MediaWidgetOverlayService.this'
+require "$WIDGETS" 'ru.big.town.anative.permission.BIND_SET_MODES_SERVICE'
+require "$WIDGETS" 'ContextCompat.RECEIVER_EXPORTED'
 require "$LEASE" 'if (owner != next || generation != ticket) return;'
 
 echo "PASS: cluster and media-widget hooks are allowlisted, fail-closed and single-VD"
