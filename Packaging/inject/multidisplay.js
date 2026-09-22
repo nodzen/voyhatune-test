@@ -38,6 +38,8 @@ Java.perform(function () {
     var MDI = null;
     var installedCore = [];
     var enabled = true;
+    var clusterGestureEnabled = false;
+    var clusterAllowed = {};
 
     // Лаунчер является home на обоих дисплеях; наши SplitHost живут на VirtualDisplay; SystemUI
     // не является переносимым приложением. Для них сохраняем явный deny.
@@ -99,12 +101,84 @@ Java.perform(function () {
             var value = SettingsGlobal.getString(ctx().getContentResolver(),
                 "voyahtune_multidisplay");
             enabled = (value === null || value === "") ? true : (parseInt(value, 10) === 1);
+            clusterGestureEnabled = ("" + SettingsGlobal.getString(ctx().getContentResolver(),
+                "voyahtune_cluster_gesture")) === "1";
+            clusterAllowed = {};
+            var allowedCsv = SettingsGlobal.getString(ctx().getContentResolver(),
+                "voyahtune_cluster_allowed_packages");
+            if (allowedCsv !== null) {
+                var allowedParts = ("" + allowedCsv).split(",");
+                for (var a = 0; a < allowedParts.length; a++) {
+                    var allowedPackage = allowedParts[a].trim();
+                    if (allowedPackage.length > 0) clusterAllowed[allowedPackage] = true;
+                }
+            }
             safeLog("i", "multidisplay enabled=" + enabled);
         } catch (e) {
             // Default-on остаётся безопасным прежним поведением; невозможность прочитать Settings
             // не означает, что core whitelist hook не установлен.
             safeLog("e", "refreshCfg: " + safeValue(e, 180));
         }
+    }
+
+    function installClusterGestureHook() {
+        var method = MDI.moveActivity;
+        if (!method || !method.overloads) {
+            safeLog("w", "[cluster] moveActivity ABI unavailable; stock gesture retained");
+            return 0;
+        }
+        var installed = 0;
+        var unsupported = [];
+        for (var i = 0; i < method.overloads.length; i++) {
+            (function (overload) {
+                var types = [];
+                var returnType = "";
+                try {
+                    for (var n = 0; n < overload.argumentTypes.length; n++) {
+                        types.push("" + overload.argumentTypes[n].className);
+                    }
+                    returnType = "" + overload.returnType.className;
+                } catch (ignoredTypes) {}
+                // Verified H97C ABI. Anything else is diagnostic-only and remains completely stock.
+                if (types.join(",") !== "java.lang.String,java.lang.String,int"
+                        || returnType !== "void") {
+                    unsupported.push("(" + types.join(",") + ")->" + returnType);
+                    return;
+                }
+                overload.implementation = function (packageName, activityName, sourceDisplayId) {
+                    var pkg = packageValue(packageName);
+                    var source = parseInt("" + sourceDisplayId, 10);
+                    if (!clusterGestureEnabled || source !== 0 || clusterAllowed[pkg] !== true) {
+                        return overload.call(this, packageName, activityName, sourceDisplayId);
+                    }
+                    try {
+                        var Intent = Java.use("android.content.Intent");
+                        var launch = Intent.$new("ru.big.town.anative.OPEN_CLUSTER_APP");
+                        launch.setClassName("ru.big.town.anative",
+                            "ru.big.town.anative.SetModesReceiverDynamic");
+                        launch.putExtra.overload("java.lang.String", "java.lang.String").call(
+                            launch, "pkg", pkg);
+                        launch.putExtra.overload("java.lang.String", "java.lang.String").call(
+                            launch, "source", "three_finger_left");
+                        ctx().sendBroadcast(launch);
+                        safeLog("i", "[cluster] intercepted left move package=" + pkg
+                            + " sourceDisplay=0");
+                        return;
+                    } catch (e) {
+                        safeLog("w", "[cluster] dispatch failed; stock move retained: "
+                            + safeValue(e, 160));
+                        return overload.call(this, packageName, activityName, sourceDisplayId);
+                    }
+                };
+                installedCore.push(overload);
+                installed++;
+            })(method.overloads[i]);
+        }
+        if (installed === 0) {
+            safeLog("w", "[cluster] unsupported moveActivity ABI " + unsupported.join("; ")
+                + "; stock gesture retained");
+        }
+        return installed;
     }
 
     function isNever(pkg) {
@@ -348,6 +422,7 @@ Java.perform(function () {
         } catch (ignoredDump) {}
 
         var coreCount = installWhitelistCore();
+        var clusterGestureCount = installClusterGestureHook();
         // Идемпотентность важнее optional diagnostics: если stdout ready-marker потеряется, второй
         // bounded inject только повторно напечатает marker и не наложит ещё один core wrapper.
         JavaSystem.setProperty(SENTINEL_KEY, "installed");
@@ -356,6 +431,7 @@ Java.perform(function () {
         var receiverReady = installReloadReceiver();
 
         signalReady("core_overloads=" + coreCount + " receiver=" + (receiverReady ? "ready" : "failed")
+            + " cluster_gesture=" + clusterGestureCount
             + " dialog_diag=" + dialogCount + " enable_diag=" + enableCount);
     } catch (e) {
         // Не оставляем частично установленный core: bounded loader retry должен начинать с OEM

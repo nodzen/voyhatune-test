@@ -192,8 +192,12 @@ if not "%LEAVECAR%"=="true" (
     adb.exe shell setprop persist.app.feature.leavecar true
 )
 
-adb.exe shell settings put global enable_freeform_support 1
-adb.exe shell settings put global force_resizable_activities 1
+rem Preserve the pre-VoyahTune values once; updates must not overwrite the rollback snapshot.
+adb.exe shell "for setting_name in enable_freeform_support force_resizable_activities hidden_api_policy; do backup_name=voyahtune_previous_$setting_name; if [ \"$(settings get global $backup_name)\" = \"null\" ]; then previous=$(settings get global $setting_name); if [ \"$previous\" = \"null\" ]; then previous=__unset__; fi; settings put global $backup_name $previous || exit 1; fi; settings put global $setting_name 1 || exit 1; done"
+if errorlevel 1 (
+    echo !!! Could not preserve and enable the system display settings.
+    exit /b 1
+)
 
 adb.exe install -r -g restore_mode.apk
 if errorlevel 1 (
@@ -371,6 +375,8 @@ if errorlevel 1 exit /b 1
 call :native_user_data_ready
 if errorlevel 1 exit /b 1
 :native_user_data_verified
+adb.exe shell "appops set --user 0 ru.big.town.anative SYSTEM_ALERT_WINDOW allow"
+if errorlevel 1 exit /b 1
 adb.exe shell "am broadcast -a com.qinggan.intent.QINGGAN_BOOT_COMPLETE -n ru.big.town.anative/.SetModesReceiverStatic >/dev/null"
 if errorlevel 1 exit /b 1
 set /a NATIVE_START_WAIT=0

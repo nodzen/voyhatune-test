@@ -22,7 +22,7 @@ import java.io.InputStream;
  *       обновления; при подписке вызвать {@link #requestRefresh(Context)}, чтобы Native сразу отдал текущий
  *       снимок.</li>
  * </ul>
- * Ничего не завязано на флейвор — работает и в full, и в light (Native priv-app в обоих).
+ * Источник работает независимо от Frida-хуков и доступен в полной сборке Native.
  */
 public final class NowPlayingClient {
 

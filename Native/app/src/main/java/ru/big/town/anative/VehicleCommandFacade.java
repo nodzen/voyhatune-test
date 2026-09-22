@@ -577,20 +577,18 @@ final class VehicleCommandFacade {
         final Map<String, Integer> trailingValues = new LinkedHashMap<>();
         final Map<String, Integer> stableIds = new LinkedHashMap<>();
 
-        if (BuildConfig.IS_FULL) {
-            final boolean stockUiTarget = apolloStockUiEnabled;
-            plan.addOnce("Apollo stock subscription/exam UI", () -> {
-                ApolloSettingsRuntimeState.TargetApplyResult result =
-                        ApolloSettingsRuntimeState.applyTarget(context, stockUiTarget);
-                if (result == ApolloSettingsRuntimeState.TargetApplyResult.CONFIRMED) {
-                    return CanRestorePlan.OperationResult.CONFIRMED;
-                }
-                if (result == ApolloSettingsRuntimeState.TargetApplyResult.ACCEPTED_UNCONFIRMED) {
-                    return CanRestorePlan.OperationResult.ACCEPTED_UNCONFIRMED;
-                }
-                return CanRestorePlan.OperationResult.TRANSIENT_FAILURE;
-            });
-        }
+        final boolean stockUiTarget = apolloStockUiEnabled;
+        plan.addOnce("Apollo stock subscription/exam UI", () -> {
+            ApolloSettingsRuntimeState.TargetApplyResult result =
+                    ApolloSettingsRuntimeState.applyTarget(context, stockUiTarget);
+            if (result == ApolloSettingsRuntimeState.TargetApplyResult.CONFIRMED) {
+                return CanRestorePlan.OperationResult.CONFIRMED;
+            }
+            if (result == ApolloSettingsRuntimeState.TargetApplyResult.ACCEPTED_UNCONFIRMED) {
+                return CanRestorePlan.OperationResult.ACCEPTED_UNCONFIRMED;
+            }
+            return CanRestorePlan.OperationResult.TRANSIENT_FAILURE;
+        });
 
         if (driveEnabled) {
             if (!DriveModeCanTransport.appendStates(

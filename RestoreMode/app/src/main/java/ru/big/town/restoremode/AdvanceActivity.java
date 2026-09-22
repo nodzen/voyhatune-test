@@ -62,18 +62,20 @@ public class AdvanceActivity extends AppCompatActivity {
     private final List<ImageButton> deleteButtons = new ArrayList<>();
 
     // Навигация: 0 быстрые действия, 1 настройки автомобиля (+комфорт), 2 приложения и разделение экрана,
-    //            3 Apollo Tech, 4 команды (видимость настраивается), 5 кнопки на руле, 6 другое
+    //            3 Apollo, 4 команды, 5 руль, 6 другое, 7 приборка,
+    //            8 кастомные виджеты, 9 производительность
     private TextView navMainScreen, navCustomCommands, navDriveModes, navSplitScreen, navApolloTech,
-            navSteeringButtons, navOther;
+            navSteeringButtons, navOther, navCluster, navCustomWidgets, navPerformance;
     private View pageMainScreen, pageCustomCommands, pageDriveModes, pageSplitScreen, pageApolloTech,
-            pageSteeringButtons, pageOther;
+            pageSteeringButtons, pageOther, pageCluster, pageCustomWidgets, pagePerformance;
     // Заголовок раздела в верхней панели (на одной строке с «Применить»)
     private TextView sectionTitle;
     // Освободившийся после переноса «Комфорта» индекс 3 занимает Apollo Tech. Индекс 4
     // (Собственные команды) показывается отдельной настройкой.
     private static final String[] SECTION_TITLES = {
             "Быстрые действия", "Настройки автомобиля", "Приложения и разделение экрана", "Apollo Tech",
-            "Собственные команды", "Кнопки на руле", "Другое"
+            "Собственные команды", "Кнопки на руле", "Другое", "Приборка",
+            "Кастомные виджеты", "Производительность"
     };
     private static final String PREF_SHOW_CUSTOM_COMMANDS = "showCustomCommands";
     private int currentSection;
@@ -102,6 +104,7 @@ public class AdvanceActivity extends AppCompatActivity {
     private SharedPreferences prefs;
     private NativeServiceClient nativeService;
     private QuickActionsController quickActions;
+    private PerformanceSettingsController performanceSettings;
 
     // Автосвет (перенесён в «Комфорт»)
     private Switch autoLightSwitch;
@@ -148,7 +151,7 @@ public class AdvanceActivity extends AppCompatActivity {
     private Switch switchApolloSettingsActivation, switchApolloTlc, switchApolloTrafficLights,
             switchApolloTrafficSigns;
     private RadioGroup apolloGreenSoundGroup;
-    private TextView textApolloSettingsActivationStatus, textApolloStatus, textApolloFullOnly;
+    private TextView textApolloSettingsActivationStatus, textApolloStatus;
     private View apolloGreenSoundContainer;
 
     // Кнопка «Применить» (верхняя панель) — блокировка + прогресс на время цикла отправки
@@ -449,6 +452,9 @@ public class AdvanceActivity extends AppCompatActivity {
         navApolloTech     = findViewById(R.id.navApolloTech);
         navSteeringButtons = findViewById(R.id.navSteeringButtons);
         navOther          = findViewById(R.id.navOther);
+        navCluster        = findViewById(R.id.navCluster);
+        navCustomWidgets  = findViewById(R.id.navCustomWidgets);
+        navPerformance    = findViewById(R.id.navPerformance);
         pageMainScreen     = findViewById(R.id.pageMainScreen);
         pageCustomCommands = findViewById(R.id.pageCustomCommands);
         pageDriveModes     = findViewById(R.id.pageDriveModes);
@@ -456,6 +462,9 @@ public class AdvanceActivity extends AppCompatActivity {
         pageApolloTech     = findViewById(R.id.pageApolloTech);
         pageSteeringButtons = findViewById(R.id.pageSteeringButtons);
         pageOther          = findViewById(R.id.pageOther);
+        pageCluster        = findViewById(R.id.pageCluster);
+        pageCustomWidgets  = findViewById(R.id.pageCustomWidgets);
+        pagePerformance    = findViewById(R.id.pagePerformance);
         textRamStatus      = findViewById(R.id.textRamStatus);
         textCpuStatus      = findViewById(R.id.textCpuStatus);
         textHookStatus     = findViewById(R.id.textHookStatus);
@@ -470,6 +479,9 @@ public class AdvanceActivity extends AppCompatActivity {
         navApolloTech.setOnClickListener(v -> setSection(3));
         navSteeringButtons.setOnClickListener(v -> setSection(5));
         navOther.setOnClickListener(v -> setSection(6));
+        navCluster.setOnClickListener(v -> setSection(7));
+        navCustomWidgets.setOnClickListener(v -> setSection(8));
+        navPerformance.setOnClickListener(v -> setSection(9));
         initApolloTech();
         setSection(0);
 
@@ -477,11 +489,10 @@ public class AdvanceActivity extends AppCompatActivity {
         navCustomCommands.setVisibility(
                 prefs.getBoolean(PREF_SHOW_CUSTOM_COMMANDS, false) ? View.VISIBLE : View.GONE);
 
-        // LIGHT: скрываем разделы «Приложения и разделение экрана» (2) и «Кнопки на руле» (5) — split/VD и Frida-руль.
-        if (!BuildConfig.IS_FULL) {
-            if (navSplitScreen != null)     navSplitScreen.setVisibility(View.GONE);
-            if (navSteeringButtons != null) navSteeringButtons.setVisibility(View.GONE);
-        }
+        FeatureSettingsMigration.migrate(prefs);
+        new ClusterSettingsController(this, prefs);
+        new WidgetSettingsController(this, prefs);
+        performanceSettings = new PerformanceSettingsController(this, prefs);
 
         initMediaAndHomeWidgetSettings();
         findViewById(R.id.buttonChooseMediaSource).setOnClickListener(this::onChooseMediaSource);
@@ -497,16 +508,13 @@ public class AdvanceActivity extends AppCompatActivity {
             sendBroadcast(i);
         });
 
-        // Ярлыки приложений на главном — в обоих флейворах (в light открывают приложение обычным
-        // способом, в full — на VD). Пресеты сплита и per-app DPI — только в full.
+        // Ярлыки, split-пресеты и per-app DPI входят в единственную полную сборку.
         initAppShortcuts();
         initDockOverride();
-        if (BuildConfig.IS_FULL) {
-            initFrozenApps();
-            initFullscreenApps();
-            initSplitScreen();
-            initAppDpiList();
-        }
+        initFrozenApps();
+        initFullscreenApps();
+        initSplitScreen();
+        initAppDpiList();
 
         // Раздел «Настройки автомобиля» (режимы + безопасность + комфорт слиты в один раздел)
         initRememberModeToggles();
@@ -587,21 +595,18 @@ public class AdvanceActivity extends AppCompatActivity {
             sendBroadcast(changed, NATIVE_CONFIG_PERMISSION);
         });
 
-        // Keyboard modifications are optional full-only Frida agents. The agents overlap in the
+        // Keyboard modifications are optional Frida agents. The agents overlap in the
         // Qinggan IME, so the two switches expose one mutually-exclusive off/en/ru preference.
         Switch switchKeyboardEnglish = findViewById(R.id.switchKeyboardEnglish);
         Switch switchKeyboardRussian = findViewById(R.id.switchKeyboardRussian);
         if (switchKeyboardEnglish != null && switchKeyboardRussian != null) {
-            String keyboardMode = BuildConfig.IS_FULL
-                    ? SplitConfigSync.normalizeKeyboardMode(prefs.getString("keyboardMode", "off"))
-                    : "off";
+            String keyboardMode = SplitConfigSync.normalizeKeyboardMode(
+                    prefs.getString("keyboardMode", "off"));
             switchKeyboardEnglish.setChecked("en".equals(keyboardMode));
             switchKeyboardRussian.setChecked("ru".equals(keyboardMode));
-            switchKeyboardEnglish.setEnabled(BuildConfig.IS_FULL);
-            switchKeyboardRussian.setEnabled(BuildConfig.IS_FULL);
             final boolean[] updatingKeyboardSwitches = {false};
             switchKeyboardEnglish.setOnCheckedChangeListener((button, checked) -> {
-                if (updatingKeyboardSwitches[0] || !BuildConfig.IS_FULL) return;
+                if (updatingKeyboardSwitches[0]) return;
                 updatingKeyboardSwitches[0] = true;
                 if (checked) switchKeyboardRussian.setChecked(false);
                 String mode = checked ? "en" : (switchKeyboardRussian.isChecked() ? "ru" : "off");
@@ -610,7 +615,7 @@ public class AdvanceActivity extends AppCompatActivity {
                 updatingKeyboardSwitches[0] = false;
             });
             switchKeyboardRussian.setOnCheckedChangeListener((button, checked) -> {
-                if (updatingKeyboardSwitches[0] || !BuildConfig.IS_FULL) return;
+                if (updatingKeyboardSwitches[0]) return;
                 updatingKeyboardSwitches[0] = true;
                 if (checked) switchKeyboardEnglish.setChecked(false);
                 String mode = checked ? "ru" : (switchKeyboardEnglish.isChecked() ? "en" : "off");
@@ -676,10 +681,7 @@ public class AdvanceActivity extends AppCompatActivity {
             });
         }
 
-        // Раздел «Кнопки на руле» (Frida-перехват кнопки-звёздочки) — только в full.
-        if (BuildConfig.IS_FULL) {
-            initSteeringButtons();
-        }
+        initSteeringButtons();
     }
 
     /**
@@ -752,9 +754,7 @@ public class AdvanceActivity extends AppCompatActivity {
         Switch instrumentSwitch = findViewById(R.id.switchShowInstrumentNowPlaying);
         if (instrumentSwitch != null) {
             instrumentSwitch.setChecked(prefs.getBoolean("showInstrumentNowPlaying", true));
-            instrumentSwitch.setEnabled(BuildConfig.IS_FULL);
             instrumentSwitch.setOnCheckedChangeListener((button, checked) -> {
-                if (!BuildConfig.IS_FULL) return;
                 prefs.edit().putBoolean("showInstrumentNowPlaying", checked).apply();
                 SplitConfigSync.pushHomeWidgets(this, prefs);
             });
@@ -806,11 +806,6 @@ public class AdvanceActivity extends AppCompatActivity {
 
     /** Opens the four OEM shelf editors; an empty shelf restores the factory order. */
     public void onConfigureHomeWidgets(View ignored) {
-        if (!BuildConfig.IS_FULL) {
-            com.google.android.material.snackbar.Snackbar.make(findViewById(R.id.main),
-                    "OEM-виджеты доступны в Full-версии", com.google.android.material.snackbar.Snackbar.LENGTH_SHORT).show();
-            return;
-        }
         new com.google.android.material.dialog.MaterialAlertDialogBuilder(this, R.style.DarkDialog)
                 .setTitle("Какую панель настроить?")
                 .setItems(HomeWidgetStore.REGION_LABELS,
@@ -943,12 +938,6 @@ public class AdvanceActivity extends AppCompatActivity {
     private Button dockSplit1Btn, dockSplit2Btn;
 
     private void initDockOverride() {
-        // «Системный док» завязан на Frida-хук лаунчера → только full. В light прячем весь блок.
-        View block = findViewById(R.id.dockOverrideBlock);
-        if (!BuildConfig.IS_FULL) {
-            if (block != null) block.setVisibility(View.GONE);
-            return;
-        }
         dockApp1Btn = findViewById(R.id.buttonDockApp1);
         dockApp2Btn = findViewById(R.id.buttonDockApp2);
         dockSplit1Btn = findViewById(R.id.buttonDockSplit1);
@@ -981,6 +970,7 @@ public class AdvanceActivity extends AppCompatActivity {
         for (int i = 1; i < STEER_ACTIONS.length; i++) actions.add(STEER_ACTIONS[i][1]);
         actions.add("Открыть сплит…");
         actions.add("Открыть приложение…");
+        actions.add("Открыть на приборке…");
         new com.google.android.material.dialog.MaterialAlertDialogBuilder(this, R.style.DarkDialog)
                 .setTitle("Долгое действие: " + dockButtonLabel(slot))
                 .setItems(actions.toArray(new CharSequence[0]), (d, which) -> {
@@ -990,12 +980,35 @@ public class AdvanceActivity extends AppCompatActivity {
                         saveDockLongAction(slot, STEER_ACTIONS[which][0], STEER_ACTIONS[which][1]);
                     } else if (which == STEER_ACTIONS.length) {
                         chooseDockSplit(slot);
-                    } else {
+                    } else if (which == STEER_ACTIONS.length + 1) {
                         showAppPicker("Открыть приложение по долгому нажатию",
                                 (pkg, label) -> saveDockLongAction(slot, "app:" + pkg,
                                         "Приложение: " + label));
+                    } else {
+                        pickDockClusterApp(slot);
                     }
                 })
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
+    /** Upstream 3.11 offered the current dock app only. The typed action keeps our allowlist and
+     * lets either dock button open any explicitly approved cluster application. */
+    private void pickDockClusterApp(int slot) {
+        List<String> allowed = ClusterAppStore.load(prefs);
+        if (allowed.isEmpty()) {
+            Snackbar.make(findViewById(R.id.main),
+                    "Сначала добавьте приложение в разделе «Приборка»",
+                    Snackbar.LENGTH_LONG).show();
+            return;
+        }
+        CharSequence[] labels = new CharSequence[allowed.size()];
+        for (int i = 0; i < allowed.size(); i++) labels[i] = applicationLabel(allowed.get(i));
+        new com.google.android.material.dialog.MaterialAlertDialogBuilder(this, R.style.DarkDialog)
+                .setTitle("Открыть на приборке")
+                .setItems(labels, (dialog, which) ->
+                        saveDockLongAction(slot, "cluster_app:" + allowed.get(which),
+                                "Приборка: " + labels[which]))
                 .setNegativeButton("Отмена", null)
                 .show();
     }
@@ -1093,7 +1106,7 @@ public class AdvanceActivity extends AppCompatActivity {
     interface AppPicked { void onPicked(String pkg, String label); }
 
     /** Диалог со списком установленных лаунчер-приложений; выбор → cb. */
-    private void showAppPicker(String title, AppPicked cb) {
+    void showAppPicker(String title, AppPicked cb) {
         android.content.pm.PackageManager pm = getPackageManager();
         Intent launcher = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
         java.util.List<android.content.pm.ResolveInfo> apps = pm.queryIntentActivities(launcher, 0);
@@ -1128,6 +1141,14 @@ public class AdvanceActivity extends AppCompatActivity {
                 .setItems(items, (d, which) -> cb.onPicked(pkgs.get(which), map.get(pkgs.get(which))))
                 .setNegativeButton("Отмена", null)
                 .show();
+    }
+    String applicationLabel(String pkg) {
+        try {
+            android.content.pm.PackageManager pm = getPackageManager();
+            return pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString();
+        } catch (Exception e) {
+            return pkg == null ? "" : pkg;
+        }
     }
     private boolean isSystemApp(String packageName) {
         return packageName.startsWith("com.qinggan")  || packageName.startsWith("com.bz")  || packageName.startsWith("com.android")
@@ -1670,6 +1691,9 @@ public class AdvanceActivity extends AppCompatActivity {
         if (pageCustomCommands != null)  pageCustomCommands.setVisibility(index == 4 ? View.VISIBLE : View.GONE);
         if (pageSteeringButtons != null) pageSteeringButtons.setVisibility(index == 5 ? View.VISIBLE : View.GONE);
         if (pageOther != null)           pageOther.setVisibility(index == 6 ? View.VISIBLE : View.GONE);
+        if (pageCluster != null)         pageCluster.setVisibility(index == 7 ? View.VISIBLE : View.GONE);
+        if (pageCustomWidgets != null)   pageCustomWidgets.setVisibility(index == 8 ? View.VISIBLE : View.GONE);
+        if (pagePerformance != null)     pagePerformance.setVisibility(index == 9 ? View.VISIBLE : View.GONE);
         if (navMainScreen != null)       navMainScreen.setSelected(index == 0);
         if (navDriveModes != null)       navDriveModes.setSelected(index == 1);
         if (navSplitScreen != null)      navSplitScreen.setSelected(index == 2);
@@ -1677,6 +1701,9 @@ public class AdvanceActivity extends AppCompatActivity {
         if (navCustomCommands != null)   navCustomCommands.setSelected(index == 4);
         if (navSteeringButtons != null)  navSteeringButtons.setSelected(index == 5);
         if (navOther != null)            navOther.setSelected(index == 6);
+        if (navCluster != null)          navCluster.setSelected(index == 7);
+        if (navCustomWidgets != null)    navCustomWidgets.setSelected(index == 8);
+        if (navPerformance != null)      navPerformance.setSelected(index == 9);
 
         if (buttonApplyAdvance != null) {
             buttonApplyAdvance.setVisibility(sectionNeedsApply(index) ? View.VISIBLE : View.GONE);
@@ -1766,7 +1793,7 @@ public class AdvanceActivity extends AppCompatActivity {
         String hookPayload = getSharedPreferences(
                 HookStatusContract.PREFERENCES_NAME, Context.MODE_PRIVATE)
                 .getString(HookStatusContract.PAYLOAD_KEY, null);
-        String hookStatus = HookStatusContract.renderForUi(hookPayload, BuildConfig.IS_FULL);
+        String hookStatus = HookStatusContract.renderForUi(hookPayload);
         return new SystemMetricsSnapshot(total, Math.max(0L, total - available), available, cpu,
                 hookStatus);
     }
@@ -1848,12 +1875,10 @@ public class AdvanceActivity extends AppCompatActivity {
         textApolloSettingsActivationStatus = findViewById(
                 R.id.textApolloSettingsActivationStatus);
         textApolloStatus = findViewById(R.id.textApolloStatus);
-        textApolloFullOnly = findViewById(R.id.textApolloFullOnly);
-
         if (switchApolloSettingsActivation != null) {
             switchApolloSettingsActivation.setChecked(prefs.getBoolean(
                     ApolloSettings.STOCK_UI, ApolloSettings.DEFAULT_ENABLED));
-            switchApolloSettingsActivation.setEnabled(BuildConfig.IS_FULL);
+            switchApolloSettingsActivation.setEnabled(true);
             switchApolloSettingsActivation.setOnCheckedChangeListener((button, checked) -> {
                 prefs.edit().putBoolean(ApolloSettings.STOCK_UI, checked).apply();
                 updateApolloUi();
@@ -1889,15 +1914,8 @@ public class AdvanceActivity extends AppCompatActivity {
     }
 
     private void updateApolloUi() {
-        if (textApolloFullOnly != null) {
-            textApolloFullOnly.setVisibility(BuildConfig.IS_FULL ? View.GONE : View.VISIBLE);
-        }
-
         if (textApolloSettingsActivationStatus != null) {
-            if (!BuildConfig.IS_FULL) {
-                textApolloSettingsActivationStatus.setText(
-                        "Недоступно в Light-версии: в ней нет Frida hook-loader.");
-            } else if (switchApolloSettingsActivation != null
+            if (switchApolloSettingsActivation != null
                     && switchApolloSettingsActivation.isChecked()) {
                 textApolloSettingsActivationStatus.setText(
                         "Включено. Применяется вместе с остальными настройками.");
@@ -2002,11 +2020,12 @@ public class AdvanceActivity extends AppCompatActivity {
     /** Добавляет ещё одно действие в конец списка слота. */
     private void pickSteerAction(String key) {
         final int staticCount = STEER_ACTIONS.length - 1; // "none" задаётся пустым списком
-        final CharSequence[] labels = new CharSequence[staticCount + 3];
+        final CharSequence[] labels = new CharSequence[staticCount + 4];
         for (int i = 0; i < staticCount; i++) labels[i] = STEER_ACTIONS[i + 1][1];
         labels[staticCount] = "Открыть сплит…";
         labels[staticCount + 1] = "Открыть приложение…";
         labels[staticCount + 2] = "Своя CAN-команда…";
+        labels[staticCount + 3] = "Открыть на приборке…";
         new com.google.android.material.dialog.MaterialAlertDialogBuilder(this, R.style.DarkDialog)
                 .setTitle("Добавить действие")
                 .setItems(labels, (d, which) -> {
@@ -2016,8 +2035,10 @@ public class AdvanceActivity extends AppCompatActivity {
                         pickSteerSplit(key);
                     } else if (which == staticCount + 1) {
                         pickSteerApp(key);
-                    } else {
+                    } else if (which == staticCount + 2) {
                         showCustomSteerCommandDialog(key);
+                    } else {
+                        pickSteerClusterApp(key);
                     }
                 })
                 .setNegativeButton("Отмена", null)
@@ -2054,6 +2075,22 @@ public class AdvanceActivity extends AppCompatActivity {
     private void pickSteerApp(String key) {
         showAppPicker("Открыть приложение",
                 (pkg, label) -> appendSteerAction(key, "app:" + pkg));
+    }
+
+    private void pickSteerClusterApp(String key) {
+        List<String> allowed = ClusterAppStore.load(prefs);
+        if (allowed.isEmpty()) {
+            Snackbar.make(findViewById(R.id.main),
+                    "Сначала добавьте приложение в разделе «Приборка»", Snackbar.LENGTH_LONG).show();
+            return;
+        }
+        CharSequence[] labels = new CharSequence[allowed.size()];
+        for (int i = 0; i < allowed.size(); i++) labels[i] = applicationLabel(allowed.get(i));
+        new com.google.android.material.dialog.MaterialAlertDialogBuilder(this, R.style.DarkDialog)
+                .setTitle("Открыть на приборке")
+                .setItems(labels, (dialog, which) ->
+                        appendSteerAction(key, "cluster_app:" + allowed.get(which)))
+                .setNegativeButton("Отмена", null).show();
     }
 
     /** Редактор одной CAN-команды с тем же live-форматированием, что и текстовый профиль команд. */
@@ -2189,6 +2226,10 @@ public class AdvanceActivity extends AppCompatActivity {
                 android.content.pm.PackageManager pm = getPackageManager();
                 return "Приложение: " + pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString();
             } catch (Exception e) { return "Приложение: " + pkg; }
+        }
+        if (id.startsWith("cluster_app:")) {
+            String pkg = id.substring("cluster_app:".length());
+            return "Приборка: " + applicationLabel(pkg);
         }
         if (id.startsWith("can:")) {
             String command = id.substring("can:".length());
@@ -2493,6 +2534,7 @@ public class AdvanceActivity extends AppCompatActivity {
         uiHandler.removeCallbacks(systemMetricsTick);
         systemMetricsExecutor.shutdownNow();
         if (quickActions != null) quickActions.close();
+        if (performanceSettings != null) performanceSettings.close();
         if (nativeService != null) nativeService.close();
         super.onDestroy();
     }

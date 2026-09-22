@@ -57,7 +57,18 @@ public class SetModesConfigReceiver extends BroadcastReceiver {
             applyHomeWidgetConfig(context, intent);
             return;
         }
-        if (!BuildConfig.IS_FULL) return;
+        if ("ru.big.town.anative.CLUSTER_WIDGET_CONFIG".equals(action)) {
+            applyClusterWidgetConfig(context, intent);
+            return;
+        }
+        if ("ru.big.town.anative.PERFORMANCE_PROFILE_APPLY".equals(action)) {
+            PerformanceProfileController.apply(context, goAsync());
+            return;
+        }
+        if ("ru.big.town.anative.PERFORMANCE_PROFILE_RESTORE".equals(action)) {
+            PerformanceProfileController.restore(context, goAsync());
+            return;
+        }
         if ("ru.big.town.anative.STEER_CONFIG".equals(action)) {
             String[] buttons = {"Star", "Dvr", "Voice", "Phone"};
             boolean needsBackService = false;
@@ -242,5 +253,27 @@ public class SetModesConfigReceiver extends BroadcastReceiver {
 
     private static String normalizeKeyboardMode(String mode) {
         return "en".equals(mode) || "ru".equals(mode) ? mode : "off";
+    }
+
+    private static void applyClusterWidgetConfig(Context context, Intent intent) {
+        android.content.ContentResolver resolver = context.getContentResolver();
+        int schema = Math.max(1, Math.min(2, intent.getIntExtra("schemaVersion", 1)));
+        String allowlist = FullscreenPackagePolicy.normalizeCsv(
+                intent.getStringExtra("clusterAllowedPackages"));
+        String rawCards = intent.getStringExtra("widgetCards");
+        String cards = WidgetCardPolicy.encode(WidgetCardPolicy.parse(rawCards));
+        boolean gesture = intent.getBooleanExtra("clusterGestureEnabled", false);
+        Settings.Global.putString(resolver, "voyahtune_feature_schema", String.valueOf(schema));
+        Settings.Global.putString(resolver, "voyahtune_cluster_allowed_packages", allowlist);
+        Settings.Global.putString(resolver, "voyahtune_cluster_gesture", gesture ? "1" : "0");
+        Settings.Global.putString(resolver, "voyahtune_custom_widget_cards", cards);
+        context.sendBroadcast(new Intent("ru.big.town.anative.MD_RELOAD")
+                .addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES));
+        Intent service = new Intent(context, MediaWidgetOverlayService.class)
+                .setAction(MediaWidgetOverlayService.ACTION_RELOAD);
+        if ("widgets-v1|music".equals(cards)) context.stopService(service);
+        else context.startForegroundService(service);
+        Log.i(TAG, "cluster/widget config schema=" + schema + " allow=" + allowlist
+                + " cards=" + cards);
     }
 }

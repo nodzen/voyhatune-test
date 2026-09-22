@@ -105,6 +105,7 @@ public class SplitHostActivity extends Activity {
     private static final int VD_FLAGS_FALLBACK = 1 | 8 | 256;
     private static volatile WeakReference<SplitHostActivity> activeHost =
             new WeakReference<>(null);
+    private final java.util.ArrayList<Runnable> closeCallbacks = new java.util.ArrayList<>();
 
     private DisplayManager displayManager;
     private int defaultDpi = 213;
@@ -193,8 +194,6 @@ public class SplitHostActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // LIGHT-сборка: VD-сплит-хост отключён (нет Frida/trusted-display) — сразу закрываемся.
-        if (!BuildConfig.IS_FULL) { finish(); return; }
         resizeThread = new HandlerThread("VoyahTune-VdResize");
         resizeThread.start();
         resizeHandler = new Handler(resizeThread.getLooper());
@@ -1435,6 +1434,7 @@ public class SplitHostActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        java.util.ArrayList<Runnable> callbacks;
         WeakReference<SplitHostActivity> current = activeHost;
         if (current.get() == this) activeHost = new WeakReference<>(null);
         retireAsyncHostWork(true);
@@ -1450,6 +1450,11 @@ public class SplitHostActivity extends Activity {
             screenLiftReceiverRegistered = false;
         }
         super.onDestroy();
+        synchronized (SplitHostActivity.class) {
+            callbacks = new java.util.ArrayList<>(this.closeCallbacks);
+            this.closeCallbacks.clear();
+        }
+        for (Runnable callback : callbacks) if (callback != null) callback.run();
     }
 
     private void stopResizeThread() {
@@ -1468,10 +1473,26 @@ public class SplitHostActivity extends Activity {
     static boolean closeActiveHost() {
         SplitHostActivity host = activeHost.get();
         if (host == null || host.isFinishing() || host.isDestroyed()) return false;
-        activeHost = new WeakReference<>(null);
         host.runOnUiThread(host::finishAndRemoveTask);
         Log.i(TAG, "active VD host closed before physical window launch");
         return true;
+    }
+
+    static void closeActiveHost(Runnable completion) {
+        SplitHostActivity host;
+        synchronized (SplitHostActivity.class) {
+            host = activeHost.get();
+            if (host != null && !host.isFinishing() && !host.isDestroyed()) {
+                if (completion != null) host.closeCallbacks.add(completion);
+            } else {
+                host = null;
+            }
+        }
+        if (host == null) {
+            if (completion != null) completion.run();
+        } else {
+            host.runOnUiThread(host::finishAndRemoveTask);
+        }
     }
 
     /**

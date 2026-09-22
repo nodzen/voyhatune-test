@@ -465,9 +465,18 @@ if ! adb shell '
         open_voyah_apollo_master open_voyah_apollo_legacy_hook_enabled \
         open_voyah_apollo_asc open_voyah_apollo_sdb \
         open_voyah_apollo_profile_supported open_voyah_apollo_profile_heartbeat \
-        voyahtune_keyboard_mode \
-        enable_freeform_support force_resizable_activities; do
+        voyahtune_keyboard_mode; do
         settings delete global "$setting_name" >/dev/null 2>&1 || exit 1
+    done
+    for setting_name in enable_freeform_support force_resizable_activities hidden_api_policy; do
+        backup_name=voyahtune_previous_$setting_name
+        previous=$(settings get global $backup_name)
+        if [ "$previous" = "null" ] || [ "$previous" = "__unset__" ]; then
+            settings delete global $setting_name >/dev/null 2>&1 || exit 1
+        else
+            settings put global $setting_name $previous >/dev/null 2>&1 || exit 1
+        fi
+        settings delete global $backup_name >/dev/null 2>&1 || exit 1
     done
 '; then
     echo "!!! Не удалось полностью очистить Settings.Global — перезагрузка отменена."
@@ -478,6 +487,7 @@ echo "  Настройки Open Voyah очищены."
 # --- Whitelist + Native из /system/priv-app (+ снять /data-оверлей обновления) ---
 echo "=== Удаление APK Open Voyah ==="
 adb shell am force-stop ru.big.town.anative >/dev/null 2>&1
+adb shell "appops set --user 0 ru.big.town.anative SYSTEM_ALERT_WINDOW default" >/dev/null 2>&1 || true
 adb shell am force-stop ru.big.town.restoremode >/dev/null 2>&1
 # PackageManager/installd обязаны сами удалить CE/DE, profiles и external app data. На Android 11
 # нельзя делать rm -rf /data/user[_de] вручную: эти пути связаны с /data_mirror и encryption policy;

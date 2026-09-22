@@ -125,7 +125,7 @@ if errorlevel 1 (
     exit /b 1
 )
 echo === Cleaning Settings.Global ===
-adb.exe shell "for setting_name in voyahtune_dock1 voyahtune_dock2 voyahtune_dock1Dpi voyahtune_dock2Dpi voyahtune_fullscreen_apps voyahtune_home_widgets_left_small voyahtune_home_widgets_left_big voyahtune_home_widgets_right_small voyahtune_home_widgets_right_big voyahtune_instrument_now_playing voyahtune_home_third_party_media voyahtune_steerStarShort voyahtune_steerStarLong voyahtune_steerDvrShort voyahtune_steerDvrLong voyahtune_steerVoiceShort voyahtune_steerVoiceLong voyahtune_steerPhoneShort voyahtune_steerPhoneLong open_voyah_apollo_master open_voyah_apollo_legacy_hook_enabled open_voyah_apollo_asc open_voyah_apollo_sdb open_voyah_apollo_profile_supported open_voyah_apollo_profile_heartbeat voyahtune_keyboard_mode enable_freeform_support force_resizable_activities; do settings delete global $setting_name >/dev/null 2>&1 || exit 1; done"
+adb.exe shell "for setting_name in voyahtune_dock1 voyahtune_dock2 voyahtune_dock1Dpi voyahtune_dock2Dpi voyahtune_fullscreen_apps voyahtune_home_widgets_left_small voyahtune_home_widgets_left_big voyahtune_home_widgets_right_small voyahtune_home_widgets_right_big voyahtune_instrument_now_playing voyahtune_home_third_party_media voyahtune_steerStarShort voyahtune_steerStarLong voyahtune_steerDvrShort voyahtune_steerDvrLong voyahtune_steerVoiceShort voyahtune_steerVoiceLong voyahtune_steerPhoneShort voyahtune_steerPhoneLong open_voyah_apollo_master open_voyah_apollo_legacy_hook_enabled open_voyah_apollo_asc open_voyah_apollo_sdb open_voyah_apollo_profile_supported open_voyah_apollo_profile_heartbeat voyahtune_keyboard_mode; do settings delete global $setting_name >/dev/null 2>&1 || exit 1; done; for setting_name in enable_freeform_support force_resizable_activities hidden_api_policy; do backup_name=voyahtune_previous_$setting_name; previous=$(settings get global $backup_name); if [ \"$previous\" = \"null\" ] || [ \"$previous\" = \"__unset__\" ]; then settings delete global $setting_name >/dev/null 2>&1 || exit 1; else settings put global $setting_name $previous >/dev/null 2>&1 || exit 1; fi; settings delete global $backup_name >/dev/null 2>&1 || exit 1; done"
 if errorlevel 1 (
     echo !!! Could not completely clean Settings.Global. Reboot was cancelled.
     exit /b 1
@@ -134,6 +134,7 @@ echo   Open Voyah settings were cleaned.
 
 echo === Removing Open Voyah APKs ===
 adb.exe shell am force-stop ru.big.town.anative >nul 2>nul
+adb.exe shell "appops set --user 0 ru.big.town.anative SYSTEM_ALERT_WINDOW default" >nul 2>nul
 adb.exe shell am force-stop ru.big.town.restoremode >nul 2>nul
 rem Android 11 CE/DE and /data_mirror state must be removed by PackageManager/installd only.
 adb.exe shell "pm uninstall ru.big.town.anative >/dev/null 2>&1 || true; pm uninstall --user 0 ru.big.town.anative >/dev/null 2>&1 || true; pm uninstall ru.big.town.restoremode >/dev/null 2>&1 || true; if pm path ru.big.town.anative 2>/dev/null | grep -q '^package:/data/app/'; then exit 1; fi; if pm path ru.big.town.restoremode 2>/dev/null | grep -q '^package:'; then exit 1; fi"

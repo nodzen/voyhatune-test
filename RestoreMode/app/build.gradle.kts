@@ -12,8 +12,8 @@ android {
         applicationId = "ru.big.town.restoremode"
         minSdk = 30
         targetSdk = 36
-        versionCode = 30900
-        versionName = "3.9.0-rc1"
+        versionCode = 30902
+        versionName = "3.9.0-rc2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         multiDexEnabled = true
@@ -34,7 +34,7 @@ android {
         }
         debug {
             // Keep diagnostics and local iteration debuggable. Size optimization belongs to
-            // release, where the full/light packaging checks exercise the output.
+            // release, where the Full packaging checks exercise the output.
             isMinifyEnabled = false
             isShrinkResources = false
 
@@ -55,18 +55,6 @@ android {
         buildConfig = true
     }
 
-    // Флейворы: full = сплит/док/кнопки на руле/VirtualDisplay; light = без них.
-    flavorDimensions += "tier"
-    productFlavors {
-        create("full") {
-            dimension = "tier"
-            buildConfigField("boolean", "IS_FULL", "true")
-        }
-        create("light") {
-            dimension = "tier"
-            buildConfigField("boolean", "IS_FULL", "false")
-        }
-    }
     dependenciesInfo {
         includeInApk = true
         includeInBundle = true

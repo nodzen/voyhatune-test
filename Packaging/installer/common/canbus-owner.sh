@@ -1,5 +1,5 @@
 #!/bin/sh
-# Shared CANBus permission-owner preflight for both release flavours.  Keep this
+# Shared CANBus permission-owner preflight for the release installer. Keep this
 # file POSIX-sh compatible: the macOS bundle runs it with /bin/sh.
 
 CANBUS_PERMISSION_NAME="com.qinggan.permission.WRITE_CANBUS"

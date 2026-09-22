@@ -166,24 +166,22 @@ final class QuickActionsController implements AutoCloseable {
     private void renderLaunchTiles() {
         launchGrid.removeAllViews();
         int index = 0;
-        if (BuildConfig.IS_FULL) {
-            for (SplitStore.Preset preset : SplitStore.load(prefs)) {
-                if (!preset.ready()) continue;
-                View tile = LayoutInflater.from(activity).inflate(
-                        R.layout.item_split_tile, launchGrid, false);
-                try {
-                    ((android.widget.ImageView) tile.findViewById(R.id.tileIcoLeft))
-                            .setImageDrawable(activity.getPackageManager().getApplicationIcon(preset.l));
-                    ((android.widget.ImageView) tile.findViewById(R.id.tileIcoRight))
-                            .setImageDrawable(activity.getPackageManager().getApplicationIcon(preset.r));
-                } catch (PackageManager.NameNotFoundException ignored) {}
-                ((TextView) tile.findViewById(R.id.tileTitle)).setText(preset.ll + " | " + preset.rl);
-                ((TextView) tile.findViewById(R.id.tileRatio)).setText(
-                        SplitStore.RATIO_LABELS[Math.max(0, Math.min(4, preset.ratio))]);
-                ((TextView) tile.findViewById(R.id.tileState)).setText("");
-                tile.setOnClickListener(v -> launchSplit(preset));
-                addTile(tile, index++);
-            }
+        for (SplitStore.Preset preset : SplitStore.load(prefs)) {
+            if (!preset.ready()) continue;
+            View tile = LayoutInflater.from(activity).inflate(
+                    R.layout.item_split_tile, launchGrid, false);
+            try {
+                ((android.widget.ImageView) tile.findViewById(R.id.tileIcoLeft))
+                        .setImageDrawable(activity.getPackageManager().getApplicationIcon(preset.l));
+                ((android.widget.ImageView) tile.findViewById(R.id.tileIcoRight))
+                        .setImageDrawable(activity.getPackageManager().getApplicationIcon(preset.r));
+            } catch (PackageManager.NameNotFoundException ignored) {}
+            ((TextView) tile.findViewById(R.id.tileTitle)).setText(preset.ll + " | " + preset.rl);
+            ((TextView) tile.findViewById(R.id.tileRatio)).setText(
+                    SplitStore.RATIO_LABELS[Math.max(0, Math.min(4, preset.ratio))]);
+            ((TextView) tile.findViewById(R.id.tileState)).setText("");
+            tile.setOnClickListener(v -> launchSplit(preset));
+            addTile(tile, index++);
         }
         for (String pkg : AppShortcutStore.load(prefs)) {
             View tile = LayoutInflater.from(activity).inflate(R.layout.item_app_tile, launchGrid, false);
@@ -227,12 +225,6 @@ final class QuickActionsController implements AutoCloseable {
     }
 
     private void launchApp(String pkg) {
-        if (!BuildConfig.IS_FULL) {
-            Intent intent = activity.getPackageManager().getLaunchIntentForPackage(pkg);
-            if (intent == null) { show("Не удалось открыть приложение"); return; }
-            activity.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-            return;
-        }
         Bundle data = new Bundle();
         data.putString("left", pkg);
         data.putString("right", "");

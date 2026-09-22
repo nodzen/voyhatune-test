@@ -87,6 +87,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -194,6 +195,16 @@
             />
 
         <service
+            android:name=".MediaWidgetOverlayService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="OEM launcher media-card overlay" />
+        </service>
+
+        <service
             android:name=".BackButtonService"
             android:enabled="true"
             android:exported="true"
@@ -237,6 +248,16 @@
             android:resizeableActivity="true"
             android:screenOrientation="landscape"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|density" />
+
+        <activity
+            android:name=".ClusterMediaHostActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:noHistory="false"
+            android:theme="@style/Theme.Native.ClusterHost"
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density" />
 
         <!-- «Сейчас играет» — снимок трека + обложка для наших поверхностей (читает RestoreMode/VoyahTune) -->
         <provider

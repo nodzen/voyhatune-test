@@ -90,7 +90,7 @@ public class WiperColdService extends Service {
 
     // Native не может вызвать оригинальный Qinggan KeyManagerReader напрямую. В full-сборке это
     // действие принимает защищённый runtime-receiver в steeringwheelkeys.js; если инжект отсутствует
-    // (включая light), ordered-broadcast completion делает безопасный стандартный fallback.
+    // ordered-broadcast completion делает безопасный стандартный fallback.
     private static final String MEDIA_PROXY_ACTION = "ru.big.town.anative.MEDIA_KEY_PROXY";
     private static final String KEYMANAGER_PACKAGE = "com.qinggan.keymanager.service";
     private static final int MEDIA_PROXY_ACK = -1;
@@ -684,7 +684,7 @@ public class WiperColdService extends Service {
         }
     }
 
-    /** Last-resort standard key path for light builds or a missing runtime hook. */
+    /** Last-resort standard key path when the runtime hook is missing. */
     private void dispatchGlobalMediaKey(AudioManager supplied, int keyCode) {
         try {
             AudioManager am = supplied != null

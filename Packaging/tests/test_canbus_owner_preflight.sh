@@ -35,7 +35,7 @@ CANBUS_TEST_DUMP='Permission [com.qinggan.permission.WRITE_CANBUS]
  sourcePackage=com.example.canbus
 Permission [android.permission.INTERNET]
  sourcePackage=android'
-if canbus_owner_preflight light >"${TMPDIR:-/tmp}/voyahtune-canbus-owner-test.$$" 2>&1; then
+if canbus_owner_preflight full >"${TMPDIR:-/tmp}/voyahtune-canbus-owner-test.$$" 2>&1; then
     echo "foreign WRITE_CANBUS owner must block an install" >&2
     exit 1
 fi
@@ -53,11 +53,11 @@ if ! canbus_owner_preflight full >/dev/null; then
     exit 1
 fi
 
-for installer in "$ROOT/Packaging/installer/full/install.sh" "$ROOT/Packaging/installer/light/install.sh"; do
+for installer in "$ROOT/Packaging/installer/full/install.sh"; do
     grep -qF 'canbus_owner_preflight' "$installer"
     grep -qF 'canbus_prepare_writable_system' "$installer"
 done
-for installer in "$ROOT/Packaging/installer/full/install.bat" "$ROOT/Packaging/installer/light/install.bat"; do
+for installer in "$ROOT/Packaging/installer/full/install.bat"; do
     grep -qF 'call canbus-owner.bat' "$installer"
 done
 grep -qF 'pm uninstall --user 0' "$HELPER"

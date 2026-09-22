@@ -1,9 +1,7 @@
 #!/bin/sh
-# Сборка релиза Open Voyah: собирает APK обоих флейворов и раскладывает готовые папки релиза.
+# Сборка Full-only релиза VoyahTune и раскладка готовой папки релиза.
 #
-#   ./make_release.sh 3.2.2              → Releases/build/v3.2.2{,-light} + Releases/dist/*.zip
-#   ./make_release.sh 3.2.2 --full-only  → только full
-#   ./make_release.sh 3.2.2 --light-only → только light
+#   ./make_release.sh 3.9.0              → Full-only release + ZIP
 #   ./make_release.sh 3.2.2 --no-build   → не пересобирать APK, только переразложить файлы
 #                                          (APK берутся из уже существующей папки сборки)
 #   ./make_release.sh 3.2.2 --no-zip     → не паковать архивы
@@ -12,7 +10,6 @@
 # Releases/ — ТОЛЬКО вывод и целиком в .gitignore: сборки в Releases/build/, готовые к
 # раздаче архивы в Releases/dist/. В репозитории релизы больше не хранятся.
 # Папка релиза остаётся ПЛОСКОЙ: install.sh ищет файлы рядом с собой, его править не нужно.
-# Заменяет собой прежние build_full.sh / build_light.sh (там версия была зашита в код).
 set -e
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -27,15 +24,11 @@ COMMON_INSTALLER_FILES="dns-overlay.sh dns-overlay.bat install-yandex-dns.sh ins
 RELEASE_README="$COMMON/README.txt"
 
 VERSION=""
-DO_FULL=1
-DO_LIGHT=1
 DO_BUILD=1
 DO_ZIP=1
 
 for arg in "$@"; do
     case "$arg" in
-        --full-only)  DO_LIGHT=0 ;;
-        --light-only) DO_FULL=0 ;;
         --no-build)   DO_BUILD=0 ;;
         --no-zip)     DO_ZIP=0 ;;
         -h|--help)    sed -n '2,16p' "$0"; exit 0 ;;
@@ -213,6 +206,14 @@ verify_common_release_assets() {
         echo "Hook status/install contract guard failed; release was not created." >&2
         exit 1
     fi
+    if ! sh "$COMMON/tests/test_full_only_build.sh"; then
+        echo "Full-only build graph guard failed; release was not created." >&2
+        exit 1
+    fi
+    if ! sh "$COMMON/tests/test_cluster_widget_contract.sh"; then
+        echo "Cluster/widget contract guard failed; release was not created." >&2
+        exit 1
+    fi
     if ! sh "$COMMON/tests/test_app_client.sh"; then
         echo "App client geometry/packaging guard failed; release was not created." >&2
         exit 1
@@ -267,7 +268,7 @@ verify_common_release_assets() {
     done
 }
 
-# Общие для full/light файлы попадают в плоский корень релиза.
+# Common files are copied into the flat Full release root.
 copy_common_release_assets() {
     out="$1"
     cp -p "$DNS_OVERLAY" "$out/$DNS_OVERLAY_NAME"
@@ -374,42 +375,33 @@ verify_windows_batch_files() {
 
 verify_release_payload() {
     out="$1"
-    flavor="$2"
-    required="README.txt native.apk restore_mode.apk $DNS_OVERLAY_NAME dns-overlay.sh dns-overlay.bat install-yandex-dns.sh install-yandex-dns.bat dns-overlay-device.sh canbus-owner.sh canbus-owner.bat install.sh install.bat remove.sh remove.bat privapp-permissions-ru.big.town.anative.xml adb.exe AdbWinApi.dll AdbWinUsbApi.dll"
-    if [ "$flavor" = full ]; then
-        required="$required frida-inject-16.2.1-android-arm64 load.bin steeringwheelkeys.js launcherdock.js multidisplay.js vd_bypass.js app_client.js apollo_tech.js keyboard_lock_en.js keyboard_ru.js instrumentcard.js voyahtune-hook-manifest.json voyahtune_keyboard_en_config.json voyahtune_keyboard_ru_config.json voyahtune_skb_qwerty_ru.json init.logcat.original.sh voyahtune.load.rc voyahtune.load.sh"
-    fi
+    required="README.txt native.apk restore_mode.apk $DNS_OVERLAY_NAME dns-overlay.sh dns-overlay.bat install-yandex-dns.sh install-yandex-dns.bat dns-overlay-device.sh canbus-owner.sh canbus-owner.bat install.sh install.bat remove.sh remove.bat privapp-permissions-ru.big.town.anative.xml adb.exe AdbWinApi.dll AdbWinUsbApi.dll frida-inject-16.2.1-android-arm64 load.bin steeringwheelkeys.js launcherdock.js multidisplay.js vd_bypass.js app_client.js apollo_tech.js keyboard_lock_en.js keyboard_ru.js instrumentcard.js voyahtune-hook-manifest.json voyahtune_keyboard_en_config.json voyahtune_keyboard_ru_config.json voyahtune_skb_qwerty_ru.json init.logcat.original.sh voyahtune.load.rc voyahtune.load.sh"
     for payload in $required; do
         if [ ! -s "$out/$payload" ]; then
-            echo "Релиз $flavor неполон: отсутствует или пуст $out/$payload." >&2
+            echo "Релиз неполон: отсутствует или пуст $out/$payload." >&2
             exit 1
         fi
     done
     sh -n "$out/install.sh"
     sh -n "$out/install-yandex-dns.sh"
     sh -n "$out/remove.sh"
-    if command -v node >/dev/null 2>&1 && [ "$flavor" = full ]; then
+    if command -v node >/dev/null 2>&1; then
         for hook in "$out/"*.js; do node --check "$hook"; done
     fi
 }
 
-# Собрать APK одного флейвора и положить в папку релиза под финальными именами.
-# $1 = full|light, $2 = папка релиза
+# Build the only supported (Full) APK pair.
 build_apks() {
-    flavor="$1"; out="$2"
-    # assembleFullRelease / assembleLightRelease — первая буква флейвора в верхнем регистре.
-    case "$flavor" in
-        full)  task="assembleFullRelease" ;;
-        light) task="assembleLightRelease" ;;
-    esac
+    out="$1"
+    task="assembleRelease"
 
     echo "== Native: $task =="
     (cd "$ROOT/Native" && ./gradlew "$task" -q)
-    cp "$ROOT/Native/app/build/outputs/apk/$flavor/release/app-$flavor-release.apk" "$out/native.apk"
+    cp "$ROOT/Native/app/build/outputs/apk/release/app-release.apk" "$out/native.apk"
 
     echo "== RestoreMode: $task =="
     (cd "$ROOT/RestoreMode" && ./gradlew "$task" -q)
-    cp "$ROOT/RestoreMode/app/build/outputs/apk/$flavor/release/app-$flavor-release.apk" "$out/restore_mode.apk"
+    cp "$ROOT/RestoreMode/app/build/outputs/apk/release/app-release.apk" "$out/restore_mode.apk"
 }
 
 # Проверка, что в папке релиза лежат APK — при --no-build мы их не собираем, но релиз без них невалиден.
@@ -498,22 +490,18 @@ commit_release_dir() {
     ACTIVE_ZIP_HAD_PREVIOUS=0
 }
 
-if [ "$DO_BUILD" != 1 ]; then
-    [ "$DO_FULL" = 0 ] || require_apks "$BUILD/VoyahTune-$VERSION"
-    [ "$DO_LIGHT" = 0 ] || require_apks "$BUILD/VoyahTune-$VERSION-light"
-fi
+if [ "$DO_BUILD" != 1 ]; then require_apks "$BUILD/VoyahTune-$VERSION"; fi
 
 # ---------------------------------------------------------------------------------------------
 # FULL: полный набор — инжект-скрипты, boot-обвязка, frida, Windows-инструменты.
 # ---------------------------------------------------------------------------------------------
-if [ "$DO_FULL" = 1 ]; then
-    OUT="$BUILD/VoyahTune-$VERSION"
+OUT="$BUILD/VoyahTune-$VERSION"
     echo ""
     echo "########## FULL → Releases/build/VoyahTune-$VERSION ##########"
     prepare_release_dir "$OUT"
     STAGE="$STAGED_OUT"
 
-    if [ "$DO_BUILD" = 1 ]; then build_apks full "$STAGE"; fi
+    if [ "$DO_BUILD" = 1 ]; then build_apks "$STAGE"; fi
 
     cp "$COMMON/tools/"*                                    "$STAGE/"
     cp "$COMMON/inject/"*.js                                "$STAGE/"
@@ -527,50 +515,15 @@ if [ "$DO_FULL" = 1 ]; then
     for f in "$COMMON/installer/full/"*; do
         copy_stamped "$f" "$STAGE/$(basename "$f")"
     done
-    verify_release_payload "$STAGE" full
+    verify_release_payload "$STAGE"
     verify_windows_batch_files "$STAGE"
     publish_release_dir "$STAGE" "$OUT"
     make_zip "$OUT" "VoyahTune-$VERSION"
     commit_release_dir
     echo "FULL готов → $OUT"
-fi
-
-# ---------------------------------------------------------------------------------------------
-# LIGHT: сокращённый набор — read-only Apollo без entitlement hook, frida, load.bin и boot-хука.
-# Инструменты берём НЕ целиком: нужен только adb (его требуют .bat на Windows; на Unix .sh
-# рассчитывает на системный adb). frida-inject в light не кладём — он весит 53M и здесь не нужен.
-# ---------------------------------------------------------------------------------------------
-LIGHT_TOOLS="adb.exe AdbWinApi.dll AdbWinUsbApi.dll"
-
-if [ "$DO_LIGHT" = 1 ]; then
-    OUT="$BUILD/VoyahTune-$VERSION-light"
-    echo ""
-    echo "########## LIGHT → Releases/build/VoyahTune-$VERSION-light ##########"
-    prepare_release_dir "$OUT"
-    STAGE="$STAGED_OUT"
-
-    if [ "$DO_BUILD" = 1 ]; then build_apks light "$STAGE"; fi
-
-    for t in $LIGHT_TOOLS; do
-        [ -f "$COMMON/tools/$t" ] || { echo "Нет $COMMON/tools/$t" >&2; exit 1; }
-        cp "$COMMON/tools/$t" "$STAGE/"
-    done
-    cp "$COMMON/system/privapp-permissions-ru.big.town.anative.xml" "$STAGE/"
-    copy_common_release_assets "$STAGE"
-    for f in "$COMMON/installer/light/"*; do
-        copy_stamped "$f" "$STAGE/$(basename "$f")"
-    done
-    verify_release_payload "$STAGE" light
-    verify_windows_batch_files "$STAGE"
-    publish_release_dir "$STAGE" "$OUT"
-    make_zip "$OUT" "VoyahTune-$VERSION-light"
-    commit_release_dir
-    echo "LIGHT готов → $OUT"
-fi
 
 echo ""
 echo "=== Состав релиза ==="
-[ "$DO_FULL" = 1 ]  && ls -1 "$BUILD/VoyahTune-$VERSION"
-[ "$DO_LIGHT" = 1 ] && { echo "--- light:"; ls -1 "$BUILD/VoyahTune-$VERSION-light"; }
+ls -1 "$BUILD/VoyahTune-$VERSION"
 echo ""
 echo "Не забыть: описание версии в hownews.md."

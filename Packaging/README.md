@@ -11,35 +11,33 @@
 
 ```text
 Releases/build/VoyahTune-3.8.4/
-Releases/build/VoyahTune-3.8.4-light/
 Releases/dist/VoyahTune-3.8.4.zip
-Releases/dist/VoyahTune-3.8.4-light.zip
 ```
 
-Флаги: `--full-only`, `--light-only`, `--no-build`, `--no-zip`.
+Флаги: `--no-build`, `--no-zip`.
 
-Для full-релиза нужен Node.js с `npx`: исходники Frida-агентов в `inject/` остаются читаемыми,
+Для релиза нужен Node.js с `npx`: исходники Frida-агентов в `inject/` остаются читаемыми,
 а `make_release.sh` собирает их в компактные файлы только внутри staging-папки. После минификации
 manifest пересчитывается от фактических файлов релиза, поэтому проверка целостности установщика
-сохраняется. Light не требует Node.js.
+сохраняется.
 
 ## Состав
 
-`full` содержит Frida-перехваты для руля, VirtualDisplay, launcher, multidisplay, полноэкранных
-клиентских окон, статуса Apollo и опциональной штатной клавиатуры. `light` не
-содержит Frida и `load.bin`. Управление сохранёнными Apollo-функциями входит в оба варианта.
+VoyahTune выпускается одной полной сборкой. Она содержит Frida-перехваты для руля,
+VirtualDisplay, launcher, multidisplay, полноэкранных клиентских окон, статуса Apollo и
+опциональной штатной клавиатуры.
 
 | Папка | Что | Куда идёт |
 |---|---|---|
-| `tools/` | ADB и `frida-inject-16.2.1-android-arm64` | full целиком; light — только ADB |
-| `inject/` | основные hooks и opt-in keyboard agents/config | только full |
-| `system/` | `load.bin`, init RC/wrapper, permission whitelist | full; whitelist также в light |
-| `vendor-overlay/` | зафиксированный DNS RRO APK и provenance | full и light |
-| `installer/common/` | общие DNS helper-файлы | full и light |
-| `installer/full/`, `installer/light/` | установщики и удаление | соответствующий вариант |
+| `tools/` | ADB и `frida-inject-16.2.1-android-arm64` | релиз |
+| `inject/` | основные hooks и opt-in keyboard agents/config | релиз |
+| `system/` | `load.bin`, init RC/wrapper, permission whitelist | релиз |
+| `vendor-overlay/` | зафиксированный DNS RRO APK и provenance | релиз |
+| `installer/common/` | общие DNS helper-файлы | релиз |
+| `installer/full/` | установщики и удаление | релиз |
 
-Light всё равно требует `adb root` и запись в `/system` для APK и permission whitelist. Full не
-заменяет штатный `/system/etc/init.logcat.sh`: загрузочная обвязка живёт в собственном
+Сборка требует `adb root` и запись в `/system` для APK и permission whitelist. Она не заменяет
+штатный `/system/etc/init.logcat.sh`: загрузочная обвязка живёт в собственном
 `voyahtune.load.rc`. `init.logcat.original.sh` нужен только для безопасной миграции старого релиза.
 
 Одиночное стороннее приложение запускается обычной задачей целевого пакета на физическом дисплее,
@@ -81,6 +79,8 @@ launcher, CAN, климат, vehicle/cluster и другие критическ�
 
 Слоты 1/2 настраиваются только для водительского дока. Пассажирские Air/Seat не переопределяются;
 при каждой синхронизации конфигурации Native сбрасывает legacy-ключи прежних сборок в `none/0`.
+На долгое нажатие любого из этих слотов можно назначить отдельное allowlisted-приложение приборки;
+действие хранится как `cluster_app:<package>` и проходит ту же проверку, что и кнопки руля.
 При опущенной панели водительский OEM one-button dock заменяется компактной раскладкой из Home и
 только тех пользовательских слотов, которым назначено приложение. Если
 назначений нет, остаётся один Home; набор центрируется по высоте. Все штатные кнопки, включая All Apps
@@ -108,13 +108,13 @@ Loader берёт эти три пакета из `voyahtune_dpi_packages`, но
 При обновлении full-установщик сначала атомарно публикует `app_client.js`, затем останавливает
 возможные legacy client-процессы и удаляет прежний `fullscreen_client.js` вместе с его маркерами.
 
-В разделе «Другое» full-варианта есть два выключенных по умолчанию взаимоисключающих режима штатной
+В разделе «Другое» есть два выключенных по умолчанию взаимоисключающих режима штатной
 Qinggan-клавиатуры. «Английская раскладка» запрещает IME сохранять китайский input mode; «Русская
 клавиатура» переносит из voboost полноценную ЙЦУКЕН-раскладку и переключение EN ↔ RU. Выбор
 зеркалируется в `Settings.Global/voyahtune_keyboard_mode`. При изменении Native перезапускает только
 `com.qinggan.app.qgime`, чтобы выгрузить прежний eternalized hook. `load.bin` читает режим ровно один
 раз на новую exact process identity и делает не более одной попытки injection; постоянного Settings
-polling нет. Light и remove выгружают qgime, удаляют agents/config/markers и возвращают штатный IME.
+polling нет. Remove выгружает qgime, удаляет agents/config/markers и возвращает штатный IME.
 
 ## Режим ручной мойки
 
@@ -168,7 +168,7 @@ CAN callback и не запускает TSP/polling менеджера.
 файла. В состоянии off он не вызывает даже `pidof` VehicleSetting. После изменения сохранённой
 настройки Native перезапускает только `com.qinggan.app.vehiclesetting`, и новая process identity получает одну попытку
 Frida-injection. При выключении процесс также перезапускается, чтобы eternalized hook не оставался в
-памяти. Light-релиз не содержит Frida и держит переключатель недоступным.
+памяти.
 
 Старые opt-in/master/profile/heartbeat ключи по-прежнему удаляются установщиками как одноразовая
 миграция. Remove останавливает VehicleSetting, выгружает eternalized agent и удаляет новый exact
@@ -287,12 +287,11 @@ feedback `POWER_HOLD_MODE_SWITCH=1` из общего process-wide `CanBusEventH
 
 ## Установка и диагностика Apollo
 
-Full installer сам перезагружает ГУ. При сохранённой включённой настройке успех виден
+Установщик сам перезагружает ГУ. При сохранённой включённой настройке успех виден
 по `[apollo] hook ready profile=persisted-target` в `/data/local/tmp/voyahtune_apollo.txt` или logcat tag
 `VoyahApollo`; hook подменяет данные подписки и экзамена, но не заставляет VehicleSettings показывать
 соответствующий блок. Перезагрузка ГУ не сбрасывает пользовательский выбор: Native восстанавливает
-его вместе с функциональными переключателями VoyahTune. В light `[apollo] hook ready` не ожидается,
-но функциональные переключатели продолжают работать.
+его вместе с функциональными переключателями VoyahTune.
 
 ## Версия и структура релиза
 

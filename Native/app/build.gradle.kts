@@ -10,8 +10,8 @@ android {
         applicationId = "ru.big.town.anative"
         minSdk = 30
         targetSdk = 36
-        versionCode = 30900
-        versionName = "3.9.0-rc1"
+        versionCode = 30902
+        versionName = "3.9.0-rc2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -42,18 +42,6 @@ android {
         buildConfig = true
     }
 
-    // Флейворы: full = VirtualDisplay/Frida; light = без них.
-    flavorDimensions += "tier"
-    productFlavors {
-        create("full") {
-            dimension = "tier"
-            buildConfigField("boolean", "IS_FULL", "true")
-        }
-        create("light") {
-            dimension = "tier"
-            buildConfigField("boolean", "IS_FULL", "false")
-        }
-    }
     ndkVersion = "29.0.14206865"
     buildToolsVersion = "36.0.0"
 }

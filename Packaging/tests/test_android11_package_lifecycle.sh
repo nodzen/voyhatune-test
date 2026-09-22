@@ -16,11 +16,11 @@ require_fixed() {
 
 for remover in \
         "$ROOT/Packaging/installer/full/remove.sh" \
-        "$ROOT/Packaging/installer/full/remove.bat" \
-        "$ROOT/Packaging/installer/light/remove.sh" \
-        "$ROOT/Packaging/installer/light/remove.bat"; do
+        "$ROOT/Packaging/installer/full/remove.bat"; do
     require_fixed "$remover" 'pm uninstall --user 0 ru.big.town.anative'
     require_fixed "$remover" 'pm uninstall ru.big.town.restoremode'
+    require_fixed "$remover" 'voyahtune_previous_$setting_name'
+    require_fixed "$remover" 'settings put global $setting_name $previous'
     if grep -Eiv '^[[:space:]]*(#|rem[[:space:]])' "$remover" \
             | grep -Eq 'rm -rf.*(/data/user|/data/user_de|/data/data|/data/misc/profiles|/sdcard/Android)'; then
         fail "$remover manually deletes PackageManager-owned Android 11 app data"
@@ -29,21 +29,20 @@ done
 
 for installer in \
         "$ROOT/Packaging/installer/full/install.sh" \
-        "$ROOT/Packaging/installer/full/install.bat" \
-        "$ROOT/Packaging/installer/light/install.sh" \
-        "$ROOT/Packaging/installer/light/install.bat"; do
+        "$ROOT/Packaging/installer/full/install.bat"; do
     require_fixed "$installer" 'pm uninstall -k --user 0 ru.big.town.anative'
     require_fixed "$installer" 'cmd package install-existing --user 0 --wait ru.big.town.anative'
     require_fixed "$installer" '/data/user/0/ru.big.town.anative'
     require_fixed "$installer" '/data/user_de/0/ru.big.town.anative'
     require_fixed "$installer" 'com.qinggan.intent.QINGGAN_BOOT_COMPLETE'
     require_fixed "$installer" 'pidof ru.big.town.anative'
+    require_fixed "$installer" 'appops set --user 0 ru.big.town.anative SYSTEM_ALERT_WINDOW allow'
+    require_fixed "$installer" 'voyahtune_previous_$setting_name'
+    require_fixed "$installer" 'settings put global $setting_name 1'
 done
 
 sh -n "$ROOT/Packaging/installer/full/install.sh"
 sh -n "$ROOT/Packaging/installer/full/remove.sh"
-sh -n "$ROOT/Packaging/installer/light/install.sh"
-sh -n "$ROOT/Packaging/installer/light/remove.sh"
 require_fixed "$RELEASE_BUILDER" 'test_android11_package_lifecycle.sh'
 require_fixed "$RELEASE_BUILDER" 'sh -n "$out/install.sh"'
 require_fixed "$RELEASE_BUILDER" 'sh -n "$out/remove.sh"'

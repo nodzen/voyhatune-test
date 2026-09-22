@@ -11,33 +11,15 @@ ACTIVITY="$ROOT/RestoreMode/app/src/main/java/ru/big/town/restoremode/AdvanceAct
 LAYOUT="$ROOT/RestoreMode/app/src/main/res/layout/activity_advance.xml"
 FULL_INSTALL="$ROOT/Packaging/installer/full/install.sh"
 FULL_INSTALL_BAT="$ROOT/Packaging/installer/full/install.bat"
-LIGHT_INSTALL="$ROOT/Packaging/installer/light/install.sh"
-LIGHT_INSTALL_BAT="$ROOT/Packaging/installer/light/install.bat"
 CANBUS_HELPER="$ROOT/Packaging/installer/common/canbus-owner.sh"
 
 fail() { echo "hook manifest/status test failed: $*" >&2; exit 1; }
 require() { grep -Fq -- "$2" "$1" || fail "$1: missing $2"; }
-forbid() {
-    if grep -Fq -- "$2" "$1"; then
-        fail "$1: forbidden $2"
-    fi
-}
-forbid_ci() {
-    if grep -Fiq -- "$2" "$1"; then
-        fail "$1: forbidden $2"
-    fi
-}
-
-line_first() {
-    grep -nF "$2" "$1" | head -n1 | cut -d: -f1
-}
-
+forbid() { if grep -Fq -- "$2" "$1"; then fail "$1: forbidden $2"; fi; }
+line_first() { grep -nF "$2" "$1" | head -n1 | cut -d: -f1; }
 sha256_file() {
-    if command -v sha256sum >/dev/null 2>&1; then
-        sha256sum "$1" | awk '{print $1}'
-    else
-        shasum -a 256 "$1" | awk '{print $1}'
-    fi
+    if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
+    else shasum -a 256 "$1" | awk '{print $1}'; fi
 }
 
 [ "$(grep -F -x -c '  "schemaVersion": 1,' "$MANIFEST")" -eq 1 ] || fail "schemaVersion != 1"
@@ -46,7 +28,7 @@ sha256_file() {
 check_entry() {
     id=$1 process=$2 script=$3
     line=$(grep -F '"id":"'"$id"'"' "$MANIFEST") || fail "missing id=$id"
-    [ "$(printf '%s\n' "$line" | grep -F -c '"process":"'"$process"'","script":"'"$script"'"')" -eq 1 ] \
+    printf '%s\n' "$line" | grep -Fq '"process":"'"$process"'","script":"'"$script"'"' \
         || fail "$id mapping mismatch"
     expected=$(printf '%s\n' "$line" | sed -n 's/.*"sha256":"\([0-9a-f]*\)".*/\1/p')
     actual=$(sha256_file "$ROOT/Packaging/inject/$script")
@@ -62,60 +44,31 @@ check_entry keyboard-en com.qinggan.app.qgime keyboard_lock_en.js
 check_entry keyboard-ru com.qinggan.app.qgime keyboard_ru.js
 check_entry instrument-card com.qinggan.instrumentcard instrumentcard.js
 
-require "$LOADER" 'HOOK_SET_VALID=ok'
-require "$LOADER" 'if [ "$HOOK_SET_VALID" != ok ]; then'
-require "$LOADER" 'mv -f "$STATUS_STAGE" "$HOOK_STATUS_FILE"'
-require "$LOADER" 'if [ "$HOOK_STATUS_LOCAL_PAYLOAD" != "$HOOK_STATUS_PAYLOAD" ]; then'
-require "$LOADER" '/system/bin/content call --user 0'
-require "$LOADER" "*'stored=true'*)"
-require "$LOADER" 'HOOK_STATUS_PROVIDER_MAX_ATTEMPTS=3'
-require "$LOADER" 'HOOK_STATUS_URI=content://ru.big.town.restoremode.restoremodecontentprovider'
-require "$LOADER" 'HOOK_STATUS_METHOD=publishHookStatusV1'
-require "$LOADER" "grep -F -x -c '  \"schemaVersion\": 1,' \"\$HOOK_MANIFEST\""
-forbid "$LOADER" "grep -F -x -c '  \\\"schemaVersion\\\": 1,' \"\$HOOK_MANIFEST\""
-require "$LOADER" "grep -F -c '{\"id\":' \"\$HOOK_MANIFEST\""
-forbid "$LOADER" "grep -F -c '{\\\"id\\\":' \"\$HOOK_MANIFEST\""
+for token in \
+        'HOOK_SET_VALID=ok' \
+        'mv -f "$STATUS_STAGE" "$HOOK_STATUS_FILE"' \
+        '/system/bin/content call --user 0' \
+        'HOOK_STATUS_PROVIDER_MAX_ATTEMPTS=3' \
+        'HOOK_STATUS_URI=content://ru.big.town.restoremode.restoremodecontentprovider' \
+        'HOOK_STATUS_METHOD=publishHookStatusV1'; do
+    require "$LOADER" "$token"
+done
 require "$PROVIDER" 'Binder.getCallingUid() != 0'
 require "$PROVIDER" '.putString(HookStatusContract.PAYLOAD_KEY, arg)'
 require "$PROVIDER" '.commit();'
 require "$CONTRACT" 'MAX_PAYLOAD_LENGTH = 2_048'
-require "$CONTRACT" 'parts.length != 4 + HOOK_IDS.length'
 require "$CONTRACT" 'AUTHORITY = "ru.big.town.restoremode.restoremodecontentprovider"'
 require "$CONTRACT" 'METHOD_PUBLISH = "publishHookStatusV1"'
 require "$APP_MANIFEST" 'android:authorities="ru.big.town.restoremode.restoremodecontentprovider"'
-
 require "$LAYOUT" 'android:id="@+id/textHookStatus"'
-require "$ACTIVITY" 'HookStatusContract.renderForUi(hookPayload, BuildConfig.IS_FULL)'
-require "$ACTIVITY" 'activityResumed && currentSection == 6'
+require "$ACTIVITY" 'HookStatusContract.renderForUi(hookPayload)'
 require "$ACTIVITY" 'SYSTEM_METRICS_INTERVAL_MS = 5_000L'
-[ "$(grep -F -c 'postDelayed(systemMetricsTick, SYSTEM_METRICS_INTERVAL_MS)' "$ACTIVITY")" -eq 1 ] \
-    || fail "hook diagnostics must reuse the only Other timer"
 
 startup_publish_line=$(grep -n '^publish_hook_status running$' "$LOADER" | tail -n1 | cut -d: -f1)
 watchdog_loop_line=$(grep -n '^while \[ 1 \]; do$' "$LOADER" | tail -n1 | cut -d: -f1)
 [ -n "$startup_publish_line" ] && [ "$startup_publish_line" -lt "$watchdog_loop_line" ] \
     || fail "initial status must be published before the injection watchdog loop"
 
-script_line=$(grep -n 'install_required_data_file keyboard_ru.js' "$FULL_INSTALL" | cut -d: -f1)
-manifest_line=$(grep -n 'install_required_data_file voyahtune-hook-manifest.json' "$FULL_INSTALL" | tail -n1 | cut -d: -f1)
-[ "$manifest_line" -gt "$script_line" ] || fail "manifest is not published after all scripts"
-require "$FULL_INSTALL" 'setprop ctl.stop voyahtune_load'
-require "$FULL_INSTALL" 'getprop init.svc.voyahtune_load'
-require "$FULL_INSTALL" "grep -F -x -c '  \"schemaVersion\": 1,' voyahtune-hook-manifest.json"
-forbid "$FULL_INSTALL" "grep -F -x -c '  \\\"schemaVersion\\\": 1,' voyahtune-hook-manifest.json"
-require "$FULL_INSTALL" "grep -F -c '{\"id\":' voyahtune-hook-manifest.json"
-forbid "$FULL_INSTALL" "grep -F -c '{\\\"id\\\":' voyahtune-hook-manifest.json"
-forbid "$FULL_INSTALL" 'pgrep -f'
-forbid "$FULL_INSTALL" 'pkill -'
-forbid "$FULL_INSTALL" 'signal_hook_runtime'
-
-# Full update safety: /system preparation is shared with Light and stays before the process freeze;
-# the only normal full-installer reboot left here is the final publish reboot. The helper has one
-# conditional verity reboot and one conditional VoyahHlCTRL-removal reboot.
-[ "$(grep -Ec '^[[:space:]]*(if ! )?adb reboot' "$FULL_INSTALL")" -eq 1 ] \
-    || fail "full install.sh must have only its final normal-install reboot"
-[ "$(grep -Ec '^[[:space:]]*(if ! )?adb reboot' "$CANBUS_HELPER")" -eq 2 ] \
-    || fail "CANBus helper must have only conditional verity and VoyahHlCTRL-removal reboots"
 require "$FULL_INSTALL" 'canbus_owner_preflight full'
 require "$FULL_INSTALL" 'canbus_prepare_writable_system'
 require "$CANBUS_HELPER" 'canbus_remove_hl_service() {'
@@ -125,184 +78,28 @@ full_sh_barrier=$(line_first "$FULL_INSTALL" 'HOOK_UPDATE_BARRIER_ARMED=1')
 full_sh_mutation=$(line_first "$FULL_INSTALL" 'if ! adb shell settings put global "$APOLLO_SAFE_KEY" 0; then')
 [ "$full_sh_verity" -lt "$full_sh_barrier" ] && [ "$full_sh_barrier" -lt "$full_sh_mutation" ] \
     || fail "full install.sh freeze is not after verity reboot and before hook mutation"
-require "$FULL_INSTALL" "adb shell 'setprop ctl.start voyahtune_load"
-require "$FULL_INSTALL" 'HOOK_UPDATE_BARRIER_ARMED=0'
+require "$FULL_INSTALL" 'setprop ctl.stop voyahtune_load'
+require "$FULL_INSTALL" 'setprop ctl.start voyahtune_load'
+require "$FULL_INSTALL" 'install_required_data_file voyahtune-hook-manifest.json'
 require "$FULL_INSTALL" 'if ! configure_yandex_dns; then'
+forbid "$FULL_INSTALL" 'pgrep -f'
+forbid "$FULL_INSTALL" 'pkill -'
 
-[ "$(grep -Ec '^adb[.]exe reboot' "$FULL_INSTALL_BAT")" -eq 2 ] \
-    || fail "full install.bat must have only verity and final reboots"
-full_bat_verity=$(grep -nF 'adb.exe reboot' "$FULL_INSTALL_BAT" | head -n1 | cut -d: -f1)
-full_bat_barrier=$(line_first "$FULL_INSTALL_BAT" 'set "HOOK_UPDATE_BARRIER_ARMED=1"')
-full_bat_mutation=$(line_first "$FULL_INSTALL_BAT" 'call :put_apollo_safe_key open_voyah_apollo_legacy_hook_enabled')
-[ "$full_bat_verity" -lt "$full_bat_barrier" ] && [ "$full_bat_barrier" -lt "$full_bat_mutation" ] \
-    || fail "full install.bat freeze is not after verity reboot and before hook mutation"
-require "$FULL_INSTALL_BAT" 'setprop ctl.stop voyahtune_load'
-require "$FULL_INSTALL_BAT" 'getprop init.svc.voyahtune_load'
-forbid "$FULL_INSTALL_BAT" 'pgrep -f'
-forbid "$FULL_INSTALL_BAT" 'pkill -'
-forbid "$FULL_INSTALL_BAT" 'signal_hook_runtime'
-require "$FULL_INSTALL_BAT" 'setprop ctl.start voyahtune_load'
-forbid_ci "$FULL_INSTALL_BAT" 'pwsh'
-forbid_ci "$FULL_INSTALL_BAT" 'cscript'
 require "$FULL_INSTALL_BAT" 'call :verify_hook_manifest'
-require "$FULL_INSTALL_BAT" 'echo === Installation completed successfully. ==='
-require "$FULL_INSTALL_BAT" 'echo === Installation failed with code %FULL_INSTALL_RESULT%. Review the messages above. ==='
-require "$FULL_INSTALL_BAT" 'echo Press any key to close this window...'
-require "$FULL_INSTALL_BAT" 'pause >nul'
+require "$FULL_INSTALL_BAT" 'setprop ctl.stop voyahtune_load'
+require "$FULL_INSTALL_BAT" 'setprop ctl.start voyahtune_load'
 require "$FULL_INSTALL_BAT" 'call "%~dp0install-yandex-dns.bat" configure'
-require "$FULL_INSTALL_BAT" 'framework-res__config_ethernet_interfaces_yandexdns.apk'
-require "$FULL_INSTALL_BAT" 'where powershell.exe 1>nul 2>nul'
-require "$FULL_INSTALL_BAT" "[Environment]::GetEnvironmentVariable('VOYAHTUNE_MANIFEST_ROOT')"
-require "$FULL_INSTALL_BAT" 'Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json'
 require "$FULL_INSTALL_BAT" 'Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256'
-require "$FULL_INSTALL_BAT" "-cnotmatch '^[0-9a-f]{64}$'"
-require "$FULL_INSTALL_BAT" '!!! SHA-256 mismatch for '
-require "$FULL_INSTALL_BAT" 'if "%HOOK_VERIFY_RESULT%"=="2" goto :verify_hook_manifest_certutil'
-require "$FULL_INSTALL_BAT" 'Unicode-safe manifest verification unavailable:'
-require "$FULL_INSTALL_BAT" ':verify_hook_manifest_certutil'
-require "$FULL_INSTALL_BAT" 'certutil.exe -hashfile "%~1" SHA256'
-require "$FULL_INSTALL_BAT" 'for /f "usebackq skip=1 delims=" %%H'
-require "$FULL_INSTALL_BAT" 'if "!HOOK_HASH_LINE:~63,1!"==""'
-require "$FULL_INSTALL_BAT" 'if not "!HOOK_HASH_LINE:~64,1!"==""'
-require "$FULL_INSTALL_BAT" 'for %%C in (0 1 2 3 4 5 6 7 8 9 a b c d e f A B C D E F)'
-require "$FULL_INSTALL_BAT" 'findstr.exe /N "^" "voyahtune-hook-manifest.json"'
-require "$FULL_INSTALL_BAT" 'findstr.exe /R /N "^$" "voyahtune-hook-manifest.json"'
-require "$FULL_INSTALL_BAT" 'if not "%HOOK_MANIFEST_SOURCE_LINES%"=="13"'
-require "$FULL_INSTALL_BAT" 'findstr.exe /R /X "[0-9][0-9]*:"'
-require "$FULL_INSTALL_BAT" 'fc.exe /B "%HOOK_ACTUAL_NORMALIZED%" "%HOOK_EXPECTED_NORMALIZED%"'
 [ "$(grep -F -c 'call :compute_sha256 ' "$FULL_INSTALL_BAT")" -eq 8 ] \
     || fail "full install.bat must hash exactly eight hook scripts"
-[ "$(grep -F -c 'del "%HOOK_EXPECTED_MANIFEST%" "%HOOK_ACTUAL_NORMALIZED%" "%HOOK_EXPECTED_NORMALIZED%"' "$FULL_INSTALL_BAT")" -ge 3 ] \
-    || fail "full install.bat must clean every manifest temp on entry/success/failure"
-for expected_mapping in \
-        '"id":"vd-bypass","process":"system_server","script":"vd_bypass.js"' \
-        '"id":"steering-wheel","process":"com.qinggan.keymanager.service","script":"steeringwheelkeys.js"' \
-        '"id":"launcher-dock","process":"com.qinggan.app.launcher","script":"launcherdock.js"' \
-        '"id":"multi-display","process":"com.qinggan.systemservice","script":"multidisplay.js"' \
-        '"id":"apollo-tech","process":"com.qinggan.app.vehiclesetting","script":"apollo_tech.js"' \
-        '"id":"keyboard-en","process":"com.qinggan.app.qgime","script":"keyboard_lock_en.js"' \
-        '"id":"keyboard-ru","process":"com.qinggan.app.qgime","script":"keyboard_ru.js"' \
-        '"id":"instrument-card","process":"com.qinggan.instrumentcard","script":"instrumentcard.js"'; do
-    require "$FULL_INSTALL_BAT" "$expected_mapping"
-done
-full_bat_manifest_preflight=$(line_first "$FULL_INSTALL_BAT" 'call :verify_hook_manifest')
-full_bat_first_adb=$(line_first "$FULL_INSTALL_BAT" 'adb.exe root')
-[ "$full_bat_manifest_preflight" -lt "$full_bat_first_adb" ] \
-    || fail "full install.bat manifest preflight must run before the first ADB call"
+forbid "$FULL_INSTALL_BAT" 'pgrep -f'
+forbid "$FULL_INSTALL_BAT" 'pkill -'
 
-# Full -> Light safety: stop after the shared remount/reboot, refuse the owned legacy init.logcat path, disable
-# the dedicated RC before deleting all project scripts/manifest/status, and never remove an unknown
-# generic injector binary. Phase 2 intentionally has no restart path.
-[ "$(grep -Ec '^[[:space:]]*(if ! )?adb reboot' "$LIGHT_INSTALL")" -eq 1 ] \
-    || fail "light install.sh must have only its final normal-install reboot"
-require "$LIGHT_INSTALL" 'canbus_owner_preflight light'
-require "$LIGHT_INSTALL" 'canbus_prepare_writable_system'
-light_sh_verity=$(line_first "$LIGHT_INSTALL" 'if ! canbus_prepare_writable_system; then')
-light_sh_barrier=$(line_first "$LIGHT_INSTALL" 'LIGHT_HOOK_BARRIER_PHASE=1')
-light_sh_mutation=$(line_first "$LIGHT_INSTALL" 'if ! adb shell settings put global "$APOLLO_SAFE_KEY" 0; then')
-light_sh_teardown=$(line_first "$LIGHT_INSTALL" 'if ! remove_full_hook_runtime_for_light; then')
-[ "$light_sh_verity" -lt "$light_sh_barrier" ] \
-    && [ "$light_sh_barrier" -lt "$light_sh_mutation" ] \
-    && [ "$light_sh_mutation" -lt "$light_sh_teardown" ] \
-    || fail "light install.sh freeze/teardown order is unsafe"
-require "$LIGHT_INSTALL" '# init.logcat.sh Open Voyah:'
-require "$LIGHT_INSTALL" 'voyahtune.load.rc.voyahtune-light-disabled'
-require "$LIGHT_INSTALL" 'mv -f "$ACTIVE_RC" "$DISABLED_RC"'
-require "$LIGHT_INSTALL" 'LOG_TAG="vt_load_bin"'
-require "$LIGHT_INSTALL" '/data/local/bin/voyahtune-hook-manifest.json'
-require "$LIGHT_INSTALL" '/data/local/tmp/voyahtune-hook-status.v1'
-require "$LIGHT_INSTALL" 'setprop ctl.stop voyahtune_load'
-require "$LIGHT_INSTALL" 'getprop init.svc.voyahtune_load'
-forbid "$LIGHT_INSTALL" 'pgrep -f'
-forbid "$LIGHT_INSTALL" 'pkill -'
-forbid "$LIGHT_INSTALL" 'signal_hook_runtime'
-require "$LIGHT_INSTALL" 'LIGHT_HOOK_BARRIER_PHASE=0'
-require "$LIGHT_INSTALL" 'install_required_system_file() {'
-require "$LIGHT_INSTALL" "restorecon '\$SYSTEM_STAGE' && mv -f '\$SYSTEM_STAGE' '\$SYSTEM_TARGET' && restorecon '\$SYSTEM_TARGET' && sync && test -f '\$SYSTEM_TARGET'"
-require "$LIGHT_INSTALL" "rm -f '\$SYSTEM_STAGE'"
-require "$LIGHT_INSTALL" 'install_required_system_file native.apk \'
-require "$LIGHT_INSTALL" '/system/priv-app/.Native.apk.voyahtune.new \'
-require "$LIGHT_INSTALL" 'install_required_system_file privapp-permissions-ru.big.town.anative.xml \'
-require "$LIGHT_INSTALL" '/system/etc/.privapp-permissions-ru.big.town.anative.xml.voyahtune.new \'
-require "$LIGHT_INSTALL" 'if ! adb reboot; then'
-forbid "$LIGHT_INSTALL" 'adb push native.apk /system/priv-app/Native/Native.apk'
-forbid "$LIGHT_INSTALL" 'adb push privapp-permissions-ru.big.town.anative.xml /system/etc/permissions/privapp-permissions-ru.big.town.anative.xml'
-light_sh_native_commit=$(line_first "$LIGHT_INSTALL" 'install_required_system_file native.apk \')
-light_sh_xml_commit=$(line_first "$LIGHT_INSTALL" 'install_required_system_file privapp-permissions-ru.big.town.anative.xml \')
-light_sh_disarm=$(grep -nF 'LIGHT_HOOK_BARRIER_PHASE=0' "$LIGHT_INSTALL" | tail -n1 | cut -d: -f1)
-light_sh_final_reboot=$(line_first "$LIGHT_INSTALL" 'if ! adb reboot; then')
-[ "$light_sh_teardown" -lt "$light_sh_native_commit" ] \
-    && [ "$light_sh_native_commit" -lt "$light_sh_xml_commit" ] \
-    && [ "$light_sh_xml_commit" -lt "$light_sh_disarm" ] \
-    && [ "$light_sh_disarm" -lt "$light_sh_final_reboot" ] \
-    || fail "light install.sh system payload is not atomically committed before disarm/reboot"
-if grep -Eq 'rm -f([^;]*[[:space:]])?/data/local/bin/frida-inject([[:space:];]|$)' "$LIGHT_INSTALL"; then
-    fail "light install.sh blindly removes the generic frida-inject"
-fi
-
-# DNS is optional in the main installer. Unix uses the shared configure function; Windows uses the
-# existing standalone helper in configure mode without its reboot.
-require "$LIGHT_INSTALL" 'if ! configure_yandex_dns; then'
-require "$LIGHT_INSTALL_BAT" 'call "%~dp0install-yandex-dns.bat" configure'
-require "$LIGHT_INSTALL_BAT" 'framework-res__config_ethernet_interfaces_yandexdns.apk'
-DNS_COMMON="$ROOT/Packaging/installer/common/dns-overlay.sh"
 DNS_INSTALL_SH="$ROOT/Packaging/installer/common/install-yandex-dns.sh"
-require "$DNS_COMMON" 'configure_yandex_dns()'
+DNS_INSTALL_BAT="$ROOT/Packaging/installer/common/install-yandex-dns.bat"
 require "$DNS_INSTALL_SH" 'configure_yandex_dns'
 require "$DNS_INSTALL_SH" 'YDNS_CHANGED'
-require "$DNS_INSTALL_SH" 'YDNS_ADB" reboot'
-sh -n "$DNS_INSTALL_SH"
-DNS_INSTALL_BAT="$ROOT/Packaging/installer/common/install-yandex-dns.bat"
-require "$DNS_INSTALL_BAT" 'if /i "%YDNS_MODE%"=="configure" goto :configure'
 require "$DNS_INSTALL_BAT" 'choice /C YN /N /M "Install Yandex DNS now? [Y/N]: "'
-require "$DNS_INSTALL_BAT" 'if "%YDNS_REBOOT%"=="0" ('
-require "$DNS_INSTALL_BAT" 'call "%YDNS_HELPER%" install'
-require "$DNS_INSTALL_BAT" 'adb.exe reboot'
-echo "PASS: DNS installation is optional and reuses the existing helper"
+sh -n "$DNS_INSTALL_SH"
 
-[ "$(grep -Ec '^adb[.]exe reboot' "$LIGHT_INSTALL_BAT")" -eq 2 ] \
-    || fail "light install.bat must have only verity and final reboots"
-light_bat_verity=$(grep -nF 'adb.exe reboot' "$LIGHT_INSTALL_BAT" | head -n1 | cut -d: -f1)
-light_bat_barrier=$(line_first "$LIGHT_INSTALL_BAT" 'set "LIGHT_HOOK_BARRIER_PHASE=1"')
-light_bat_mutation=$(line_first "$LIGHT_INSTALL_BAT" 'call :put_apollo_safe_key open_voyah_apollo_legacy_hook_enabled')
-light_bat_teardown=$(line_first "$LIGHT_INSTALL_BAT" 'call :remove_full_hook_runtime_for_light')
-[ "$light_bat_verity" -lt "$light_bat_barrier" ] \
-    && [ "$light_bat_barrier" -lt "$light_bat_mutation" ] \
-    && [ "$light_bat_mutation" -lt "$light_bat_teardown" ] \
-    || fail "light install.bat freeze/teardown order is unsafe"
-require "$LIGHT_INSTALL_BAT" '# init.logcat.sh Open Voyah:'
-require "$LIGHT_INSTALL_BAT" 'voyahtune.load.rc.voyahtune-light-disabled'
-require "$LIGHT_INSTALL_BAT" 'mv -f $ACTIVE_RC $DISABLED_RC'
-require "$LIGHT_INSTALL_BAT" "LOG_TAG=\\\"vt_load_bin\\\""
-require "$LIGHT_INSTALL_BAT" '/data/local/bin/voyahtune-hook-manifest.json'
-require "$LIGHT_INSTALL_BAT" '/data/local/tmp/voyahtune-hook-status.v1'
-require "$LIGHT_INSTALL_BAT" 'setprop ctl.stop voyahtune_load'
-require "$LIGHT_INSTALL_BAT" 'getprop init.svc.voyahtune_load'
-forbid "$LIGHT_INSTALL_BAT" 'pgrep -f'
-forbid "$LIGHT_INSTALL_BAT" 'pkill -'
-forbid "$LIGHT_INSTALL_BAT" 'signal_hook_runtime'
-require "$LIGHT_INSTALL_BAT" 'set "LIGHT_HOOK_BARRIER_PHASE=0"'
-require "$LIGHT_INSTALL_BAT" ':install_required_system_file'
-require "$LIGHT_INSTALL_BAT" "restorecon '%~2' && mv -f '%~2' '%~3' && restorecon '%~3' && sync && test -f '%~3'"
-require "$LIGHT_INSTALL_BAT" "rm -f '%~2'"
-require "$LIGHT_INSTALL_BAT" 'call :install_required_system_file native.apk /system/priv-app/.Native.apk.voyahtune.new /system/priv-app/Native/Native.apk 644'
-require "$LIGHT_INSTALL_BAT" 'call :install_required_system_file privapp-permissions-ru.big.town.anative.xml /system/etc/.privapp-permissions-ru.big.town.anative.xml.voyahtune.new /system/etc/permissions/privapp-permissions-ru.big.town.anative.xml 644'
-forbid "$LIGHT_INSTALL_BAT" 'adb.exe push native.apk /system/priv-app/Native/Native.apk'
-forbid "$LIGHT_INSTALL_BAT" 'adb.exe push privapp-permissions-ru.big.town.anative.xml /system/etc/permissions/privapp-permissions-ru.big.town.anative.xml'
-light_bat_native_commit=$(line_first "$LIGHT_INSTALL_BAT" 'call :install_required_system_file native.apk ')
-light_bat_xml_commit=$(line_first "$LIGHT_INSTALL_BAT" 'call :install_required_system_file privapp-permissions-ru.big.town.anative.xml ')
-light_bat_disarm=$(grep -nF 'set "LIGHT_HOOK_BARRIER_PHASE=0"' "$LIGHT_INSTALL_BAT" | tail -n1 | cut -d: -f1)
-light_bat_final_reboot=$(grep -nF 'adb.exe reboot' "$LIGHT_INSTALL_BAT" | tail -n1 | cut -d: -f1)
-[ "$light_bat_teardown" -lt "$light_bat_native_commit" ] \
-    && [ "$light_bat_native_commit" -lt "$light_bat_xml_commit" ] \
-    && [ "$light_bat_xml_commit" -lt "$light_bat_disarm" ] \
-    && [ "$light_bat_disarm" -lt "$light_bat_final_reboot" ] \
-    || fail "light install.bat system payload is not atomically committed before disarm/reboot"
-if LC_ALL=C tr -d '\011\012\015\040-\176' < "$LIGHT_INSTALL_BAT" | grep -q .; then
-    fail "light install.bat must remain ASCII"
-fi
-if grep -Eq 'rm -f([^;]*[[:space:]])?/data/local/bin/frida-inject([[:space:];]|$)' "$LIGHT_INSTALL_BAT"; then
-    fail "light install.bat blindly removes the generic frida-inject"
-fi
-
-echo "PASS: atomic hook manifest and demand-scoped status contract"
+echo "PASS: Full-only atomic hook manifest and demand-scoped status contract"

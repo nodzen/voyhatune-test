@@ -61,7 +61,7 @@ public class SetModesReceiverDynamic extends BroadcastReceiver {
 
         // Одиночное приложение из дока открываем обычной задачей целевого пакета на физическом дисплее.
         // Глобальный WindowManager hook ужмёт её рамку; VD остаётся только для split-пресетов. Только full.
-        if ("ru.big.town.anative.OPEN_FREEFORM".equals(receivedIntent) && BuildConfig.IS_FULL) {
+        if ("ru.big.town.anative.OPEN_FREEFORM".equals(receivedIntent)) {
             // Переопределяемые слоты существуют только на водительском экране. Receiver экспортирован
             // ради launcher-agent, поэтому не доверяем display extra от explicit broadcast: старый агент
             // или сторонний отправитель не должен вернуть удалённый passenger launch path.
@@ -79,7 +79,7 @@ public class SetModesReceiverDynamic extends BroadcastReceiver {
         // Launcher hook routes an allowlisted All Apps tile here so ActivityOptions can normalize a
         // reused freeform task before the activity is resumed. The exported bridge accepts only the
         // exact package persisted by the protected fullscreen config receiver.
-        if ("ru.big.town.anative.OPEN_FULLSCREEN".equals(receivedIntent) && BuildConfig.IS_FULL) {
+        if ("ru.big.town.anative.OPEN_FULLSCREEN".equals(receivedIntent)) {
             String pkg = intent.getStringExtra("pkg");
             int displayId = intent.getIntExtra("display", 0);
             if (displayId != 0 && displayId != 1) {
@@ -94,7 +94,7 @@ public class SetModesReceiverDynamic extends BroadcastReceiver {
         // All Apps launches ordinary physical-display tasks through the OEM AppLauncher and do
         // not pass through openFreeformApp(). Record that launch explicitly so "last session" is
         // not limited to split/dock paths.
-        if ("ru.big.town.anative.RECORD_LAST_SESSION".equals(receivedIntent) && BuildConfig.IS_FULL) {
+        if ("ru.big.town.anative.RECORD_LAST_SESSION".equals(receivedIntent)) {
             String pkg = intent.getStringExtra("pkg");
             int displayId = intent.getIntExtra("display", 0);
             if (displayId != 0 && displayId != 1) {
@@ -111,7 +111,7 @@ public class SetModesReceiverDynamic extends BroadcastReceiver {
         // Открытие СПЛИТА, назначенного слоту дока, по долгому нажатию (launcherdock.js шлёт номер слота).
         // Детали сплита читаем из Settings.Global — их зеркалит mirrorDock из DOCK_CONFIG (VoyahTune).
         // SplitHostActivity.launchSplit уходит на VD (обычный движок сплита); коллизии панелей он гасит сам.
-        if ("ru.big.town.anative.OPEN_DOCK_SPLIT".equals(receivedIntent) && BuildConfig.IS_FULL) {
+        if ("ru.big.town.anative.OPEN_DOCK_SPLIT".equals(receivedIntent)) {
             int slot = intent.getIntExtra("slot", 0);
             if (slot == 1 || slot == 2) {
                 android.content.ContentResolver cr = context.getContentResolver();
@@ -138,7 +138,7 @@ public class SetModesReceiverDynamic extends BroadcastReceiver {
         // Универсальное действие долгого нажатия слота дока. Значение прошло через защищённый
         // DOCK_CONFIG и сверяется с ним ещё раз, поэтому публичный launcher bridge не становится
         // произвольным исполнителем команд.
-        if ("ru.big.town.anative.OPEN_DOCK_ACTION".equals(receivedIntent) && BuildConfig.IS_FULL) {
+        if ("ru.big.town.anative.OPEN_DOCK_ACTION".equals(receivedIntent)) {
             int slot = intent.getIntExtra("slot", 0);
             String action = intent.getStringExtra("action");
             if ((slot == 1 || slot == 2) && isConfiguredDockAction(context, slot, action)) {
@@ -149,10 +149,45 @@ public class SetModesReceiverDynamic extends BroadcastReceiver {
         }
 
         // Исполнение назначенного действия кнопки руля. Только full.
-        if ("ru.big.town.anative.STEER_ACTION".equals(receivedIntent) && BuildConfig.IS_FULL) {
+        if ("ru.big.town.anative.STEER_ACTION".equals(receivedIntent)) {
             String action = intent.getStringExtra("action");
             if (isConfiguredSteerAction(context, action)) handleSteerActions(context, action);
             else Log.w(TAG, "STEER_ACTION отклонён: действие не настроено: " + action);
+        }
+
+        if ("ru.big.town.anative.OPEN_CLUSTER_APP".equals(receivedIntent)) {
+            String pkg = intent.getStringExtra("pkg");
+            String source = intent.getStringExtra("source");
+            boolean gestureEnabled = "1".equals(android.provider.Settings.Global.getString(
+                    context.getContentResolver(), "voyahtune_cluster_gesture"));
+            if ("three_finger_left".equals(source) && gestureEnabled) {
+                AppLaunchCoordinator.get(context).openOnCluster(pkg, source, result ->
+                        Log.i(TAG, "OPEN_CLUSTER_APP " + pkg + " -> " + result.reason));
+            } else {
+                Log.w(TAG, "OPEN_CLUSTER_APP отклонён: source=" + source
+                        + " gestureEnabled=" + gestureEnabled);
+            }
+        }
+
+        if ("ru.big.town.anative.OPEN_PHYSICAL_APP".equals(receivedIntent)) {
+            String pkg = intent.getStringExtra("pkg");
+            if (hasLaunchIntent(context, pkg)) {
+                LastSessionStore.recordFreeform(context.getApplicationContext(), pkg, 0);
+                AppLaunchCoordinator.get(context).openPhysical(pkg, 0,
+                        isConfiguredFullscreenPackage(context, pkg), result ->
+                                Log.i(TAG, "OPEN_PHYSICAL_APP " + pkg + " -> " + result.reason));
+            }
+        }
+
+        if (MediaWidgetOverlayService.ACTION_GEOMETRY.equals(receivedIntent)
+                || MediaWidgetOverlayService.ACTION_SWIPE.equals(receivedIntent)) {
+            String cards = android.provider.Settings.Global.getString(context.getContentResolver(),
+                    "voyahtune_custom_widget_cards");
+            if (cards == null || "widgets-v1|music".equals(cards)) return;
+            Intent service = new Intent(context, MediaWidgetOverlayService.class)
+                    .setAction(receivedIntent);
+            if (intent.getExtras() != null) service.putExtras(intent.getExtras());
+            context.startForegroundService(service);
         }
 //        if (receivedIntent.equals("ru.big.town.anative.APPLY_DRIVE_MODES")) {
 //            repeat = 3;
@@ -538,6 +573,10 @@ public class SetModesReceiverDynamic extends BroadcastReceiver {
             try {
                 if ("system_back".equals(action)) {
                     BackButtonService.performBack(ctx);
+                } else if (action.startsWith("cluster_app:")) {
+                    String pkg = ClusterLaunchPolicy.packageFromAction(action);
+                    AppLaunchCoordinator.get(ctx).openOnCluster(pkg, "steering", result ->
+                            Log.i(TAG, "STEER_ACTION cluster " + pkg + " -> " + result.reason));
                 } else if (action.startsWith("app:")) {
                     // Открыть отдельное приложение (freeform-окно на display 0), закрыв активный сплит.
                 openFreeformApp(ctx, action.substring("app:".length()));
@@ -637,28 +676,11 @@ public class SetModesReceiverDynamic extends BroadcastReceiver {
         if (remember) LastSessionStore.recordFreeform(app, pkg, displayId);
         launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         DockLaunchGuard.arm(app, displayId, pkg);
-        boolean closedVdHost = SplitHostActivity.closeActiveHost();
-        android.app.ActivityOptions options = android.app.ActivityOptions.makeBasic();
-        options.setLaunchDisplayId(displayId);
-        final android.os.Bundle optionBundle = options.toBundle();
         final boolean fullscreen = isConfiguredFullscreenPackage(app, pkg);
-        if (fullscreen) {
-            // ActivityOptions.KEY_LAUNCH_WINDOWING_MODE is hidden in this Android 11 SDK, but the
-            // framework contract key is stable. Applying FULLSCREEN=1 at launch also normalizes an
-            // already existing task whose previous incarnation retained freeform bounds/mode 5.
-            optionBundle.putInt("android.activity.windowingMode", 1);
-        }
-        Runnable launch = () -> {
-            try { app.startActivity(launchIntent, optionBundle); }
-            catch (Exception e) { Log.w(TAG, "openFreeformApp: " + e.getMessage()); }
-        };
-        if (closedVdHost) {
-            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(launch, 500L);
-        } else {
-            launch.run();
-        }
+        AppLaunchCoordinator.get(app).openPhysical(pkg, displayId,
+                fullscreen, result -> Log.i(TAG, "openFreeformApp " + pkg + " -> " + result.reason));
         Log.i(TAG, "openFreeformApp window-managed pkg=" + pkg + " display=" + displayId
-                + " fullscreen=" + fullscreen + " closedVdHost=" + closedVdHost);
+                + " fullscreen=" + fullscreen + " hostHandoff=callback");
     }
 
     /**

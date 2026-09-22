@@ -168,6 +168,10 @@ ensure_native_user_ready() {
         echo "!!! Native APK найден, но PackageManager не создал оба CE/DE data-каталога."
         return 1
     fi
+    if ! adb shell "appops set --user 0 ru.big.town.anative SYSTEM_ALERT_WINDOW allow"; then
+        echo "!!! Не удалось разрешить Native overlay для кастомных медиакарточек."
+        return 1
+    fi
 
     # BOOT_COMPLETED мог пройти до install-existing. Поднимаем тот же штатный receiver один раз и
     # проверяем фактический process attach, чтобы installer не объявил успех при zygote crash-loop.
@@ -733,12 +737,22 @@ if [ "$LEAVECAR" != "true" ]; then
     adb shell setprop persist.app.feature.leavecar true
 fi
 
-# Freeform (окна resizable — нужно для VirtualDisplay-сплита; применяется после ребута)
-adb shell settings put global enable_freeform_support 1
-adb shell settings put global force_resizable_activities 1
-
-# Достпу к не‑SDK‑интерфейсам
-adb shell settings put global hidden_api_policy 1
+# Freeform и hidden API нужны для display/task orchestration. Первое исходное значение сохраняем
+# отдельно и не перезаписываем при обновлениях, чтобы remove.sh мог вернуть состояние до VoyahTune.
+if ! adb shell '
+    for setting_name in enable_freeform_support force_resizable_activities hidden_api_policy; do
+        backup_name=voyahtune_previous_$setting_name
+        if [ "$(settings get global $backup_name)" = "null" ]; then
+            previous=$(settings get global $setting_name)
+            if [ "$previous" = "null" ]; then previous=__unset__; fi
+            settings put global $backup_name $previous || exit 1
+        fi
+        settings put global $setting_name 1 || exit 1
+    done
+'; then
+    echo "!!! Не удалось сохранить и включить системные display-настройки."
+    exit 1
+fi
 
 if ! adb install -r -g restore_mode.apk; then
     echo "!!! RestoreMode не установлен — исправьте ошибку и повторите installer до перезагрузки."

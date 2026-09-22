@@ -5,6 +5,7 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 VD="$ROOT/Packaging/inject/vd_bypass.js"
 DOCK="$ROOT/Packaging/inject/launcherdock.js"
 RECEIVER="$ROOT/Native/app/src/main/java/ru/big/town/anative/SetModesReceiverDynamic.java"
+COORDINATOR="$ROOT/Native/app/src/main/java/ru/big/town/anative/AppLaunchCoordinator.java"
 SERVICE="$ROOT/Native/app/src/main/java/ru/big/town/anative/SetModesService.java"
 HOST="$ROOT/Native/app/src/main/java/ru/big/town/anative/SplitHostActivity.java"
 MANIFEST="$ROOT/Native/app/src/main/AndroidManifest.xml"
@@ -97,7 +98,7 @@ do
 done
 grep -Fq 'if (fullscreen && wt === 1' "$VD" \
     || fail "requested Surface size override is not restricted to the main Activity window"
-grep -Fq 'optionBundle.putInt("android.activity.windowingMode", 1);' "$RECEIVER" \
+grep -Fq 'bundle.putInt("android.activity.windowingMode", 1);' "$COORDINATOR" \
     || fail "reused freeform tasks are not normalized to Android fullscreen at launch"
 grep -Fq '"ru.big.town.anative.OPEN_FULLSCREEN".equals(receivedIntent)' "$RECEIVER" \
     || fail "launcher All Apps has no validated Native fullscreen launch bridge"
@@ -283,12 +284,12 @@ grep -Fq 'setDockViewVisibility(driverTemperature, compact ? 8 : 0' "$DOCK" \
     || fail "compact dock does not hide the stock driver climate overlay"
 grep -Fq 'final boolean fullscreen = isConfiguredFullscreenPackage(app, pkg);' "$RECEIVER" \
     || fail "launch-time windowing mode is not scoped to the saved fullscreen allowlist"
-grep -Fq 'if (fullscreen) {' "$RECEIVER" \
+grep -Fq 'if (fullscreen) bundle.putInt("android.activity.windowingMode", 1);' "$COORDINATOR" \
     || fail "ordinary single-app launches no longer remain normal WindowManager-clamped tasks"
-if grep -Fq 'setLaunchBounds' "$RECEIVER"; then
+if grep -Fq 'setLaunchBounds' "$COORDINATOR"; then
     fail "Native must not bypass the global WindowManager bounds contract"
 fi
-grep -Fq 'app.startActivity(launchIntent, optionBundle)' "$RECEIVER" \
+grep -Fq 'app.startActivity(launch, bundle)' "$COORDINATOR" \
     || fail "target package is not launched as the real top activity"
 grep -Fq 'SetModesReceiverDynamic.ensureAppDpi(' "$SERVICE" \
     || fail "single-app launch discards its configured DPI"

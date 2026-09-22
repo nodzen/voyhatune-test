@@ -1,4 +1,10 @@
 import {bridgeConnected, planMediaTransition} from "./lib/media_transition.mjs";
+import {
+    buildOemMediaModel,
+    isBridgeMediaPackage,
+    normalizeMediaSnapshot,
+    selectBridgeSource
+} from "./lib/media_core.mjs";
 
 // launcherdock.js — переопределение кнопок «Звонок»/«Радио» и стабилизация доков обоих экранов Open Voyah.
 // На ОД-прошивках это NavigationBarMain + NavigationBarSecond, на ПИ — общий NavigationBar с mScreenId.
@@ -828,6 +834,22 @@ Java.perform(function () {
         } catch (e) { Log.w(TAG, "[allapps] remember last session failed: " + e); }
     }
 
+    function launchPhysicalViaNative(pkg, displayId) {
+        try {
+            if (displayId !== 0 || !pkg) return false;
+            var i = Intent.$new("ru.big.town.anative.OPEN_PHYSICAL_APP");
+            i.setClassName(OUR_PKG, "ru.big.town.anative.SetModesReceiverDynamic");
+            i.putExtra.overload('java.lang.String', 'java.lang.String').call(i, "pkg", "" + pkg);
+            i.putExtra.overload('java.lang.String', 'java.lang.String').call(i, "source", "all_apps");
+            i.addFlags(0x00000020);
+            ctx().sendBroadcast(i);
+            return true;
+        } catch (e) {
+            Log.w(TAG, "[allapps] physical coordinator unavailable: " + e);
+            return false;
+        }
+    }
+
     // Штатный All Apps фильтрует почти все сторонние APK. Вариант voboost решает это хуком
     // AllAppDataManager + AllAppAdapter. Здесь тот же контракт для обоих физических экранов;
     // запуск делегируется OEM AppLauncher с mScreenId владельца All Apps. У AllAppAdapter нет mScreenId,
@@ -931,6 +953,7 @@ Java.perform(function () {
                     var screenId = Number(screenIdArg);
                     var pkg = packageFromIntent(intent);
                     if (isUserFullscreen(pkg) && launchFullscreen(pkg, screenId)) return;
+                    if (launchPhysicalViaNative(pkg, screenId)) return;
                     rememberLastSession(pkg, screenId);
                     return startAppIntent.call(this, context, intent, screenIdArg);
                 };
@@ -940,6 +963,7 @@ Java.perform(function () {
                     var pkg = cleanJavaString(pkgArg);
                     var screenId = Number(screenIdArg);
                     if (isUserFullscreen(pkg) && launchFullscreen(pkg, screenId)) return;
+                    if (launchPhysicalViaNative(pkg, screenId)) return;
                     rememberLastSession(pkg, screenId);
                     return startAppComponent.call(this,
                             context, pkgArg, classArg, screenIdArg);
@@ -1962,6 +1986,7 @@ Java.perform(function () {
             var NO_MEDIA = null;
             var mediaControl = null;
             var nativeMediaResourceHooked = false;
+            var republishWidgetGeometry = function () {};
 
             function mediaString(value) { return cleanJavaString(value); }
             function isPlaybackActive(state) {
@@ -2078,7 +2103,7 @@ Java.perform(function () {
                     }
                 } catch (e) { Log.w(TAG, "[media] snapshot query failed: " + e); }
                 finally { try { if (cursor !== null) cursor.close(); } catch (ignored) {} }
-                return result;
+                return normalizeMediaSnapshot(result);
             }
             function readMediaSources() {
                 var result = [];
@@ -2109,13 +2134,7 @@ Java.perform(function () {
                 } catch (e) { enabled = true; }
             }
             function isBridgeSourcePackage(pkg) {
-                // Radio, Bluetooth and the OEM local players already have their own native
-                // MediaEnum sources. The bridge is exclusively for application MediaSessions.
-                if (!pkg || pkg === "ru.big.town.anative" || pkg === "android") return false;
-                return pkg.indexOf("com.qinggan.") !== 0
-                        && pkg.indexOf("com.pateo.") !== 0
-                        && pkg.indexOf("tai.") !== 0
-                        && pkg.indexOf("com.android.bluetooth") !== 0;
+                return isBridgeMediaPackage(pkg);
             }
             function bridgeSourcesFrom(sources, selectedSource) {
                 var result = [];
@@ -2150,21 +2169,7 @@ Java.perform(function () {
                 return key;
             }
             function findSelectedBridgeSource(snapshot, sources) {
-                // Snapshot and source topology cross process boundaries separately. The snapshot
-                // is the fresher authority during an app↔Bluetooth handoff; otherwise an old
-                // selected Spotify row can keep WECAR_FLOW active while the OEM is already on BT.
-                if (snapshot.pkg && !isBridgeSourcePackage(snapshot.pkg)) return null;
-                if (isBridgeSourcePackage(snapshot.pkg)) {
-                    for (var current = 0; current < sources.length; current++) {
-                        if (sources[current].pkg === snapshot.pkg
-                                && isBridgeSourcePackage(sources[current].pkg)) return sources[current];
-                    }
-                    return {pkg: snapshot.pkg, label: snapshot.app, selected: true};
-                }
-                for (var i = 0; i < sources.length; i++) {
-                    if (sources[i].selected && isBridgeSourcePackage(sources[i].pkg)) return sources[i];
-                }
-                return null;
+                return selectBridgeSource(snapshot, sources);
             }
             function setInfoValue(info, name, signature, value) {
                 try {
@@ -2182,25 +2187,21 @@ Java.perform(function () {
                 } catch (e) {
                     try { info = QinMediaInfo.$new(); } catch (e2) { return null; }
                 }
-                var pkg = snapshot.pkg || selectedMediaPackage;
-                setInfoValue(info, "setName", "java.lang.String",
-                        snapshot.title || snapshot.app || pkg || "Media");
-                setInfoValue(info, "setArtist", "java.lang.String", snapshot.artist);
-                setInfoValue(info, "setAlbumName", "java.lang.String", snapshot.album);
-                setInfoValue(info, "setDuration", "long", Math.max(0, Number(snapshot.duration || 0)));
-                setInfoValue(info, "setMediaId", "java.lang.String",
-                        pkg + "|" + snapshot.title + "|" + snapshot.artist);
-                setInfoValue(info, "setMediaType", "java.lang.String", "WECAR_FLOW");
-                setInfoValue(info, "setHostId", "java.lang.String", pkg);
-                setInfoValue(info, "setPath", "java.lang.String", pkg);
-                setInfoValue(info, "setCoverUrl", "java.lang.String",
-                        snapshot.hasArt ? "content://ru.big.town.anative.nowplaying/art?rev="
-                                + Number(snapshot.updatedAt || 0) : "");
+                var model = buildOemMediaModel(snapshot, selectedMediaPackage);
+                setInfoValue(info, "setName", "java.lang.String", model.name);
+                setInfoValue(info, "setArtist", "java.lang.String", model.artist);
+                setInfoValue(info, "setAlbumName", "java.lang.String", model.album);
+                setInfoValue(info, "setDuration", "long", model.duration);
+                setInfoValue(info, "setMediaId", "java.lang.String", model.mediaId);
+                setInfoValue(info, "setMediaType", "java.lang.String", model.mediaType);
+                setInfoValue(info, "setHostId", "java.lang.String", model.hostId);
+                setInfoValue(info, "setPath", "java.lang.String", model.path);
+                setInfoValue(info, "setCoverUrl", "java.lang.String", model.coverUrl);
                 setInfoValue(info, "setFav", "boolean", false);
                 try {
                     var extras = BundleMedia.$new();
                     extras.putString.overload("java.lang.String", "java.lang.String").call(
-                            extras, StringMedia.$new("package"), StringMedia.$new(pkg));
+                            extras, StringMedia.$new("package"), StringMedia.$new(model.packageName));
                     setInfoValue(info, "setExtBundle", "android.os.Bundle", extras);
                 } catch (e3) {}
                 return info;
@@ -3957,6 +3958,7 @@ Java.perform(function () {
                                     if (action === RELOAD_ACT) {
                                         invalidateWidgetRewriteCache();
                                         installHomeWidgetHooks();
+                                        setTimeout(function () { republishWidgetGeometry(); }, 0);
                                     }
                                     if (action === WAKE_REFRESH) scheduleWakeRefresh();
                                     else scheduleMediaRefresh();
@@ -3983,12 +3985,95 @@ Java.perform(function () {
                 } catch (e) { Log.w(TAG, "[media] receiver unavailable: " + e); }
             }
 
+            function installCustomWidgetGeometryHooks() {
+                try {
+                    var BigMediaCard = Java.use(BIG_MEDIA_CARD_NAME);
+                    var IntentWidget = Java.use("android.content.Intent");
+                    var lastGeometry = "";
+                    var latestWidgetView = null;
+                    var downX = 0;
+                    function publish(view, visible) {
+                        try {
+                            if (latestWidgetView === null || !latestWidgetView.equals(view)) {
+                                if (latestWidgetView !== null) {
+                                    try { latestWidgetView.$dispose(); } catch (ignoredDispose) {}
+                                }
+                                latestWidgetView = Java.retain(view);
+                            }
+                            var location = Java.array("int", [0, 0]);
+                            view.getLocationOnScreen(location);
+                            var x = Number(location[0]), y = Number(location[1]);
+                            var width = Number(view.getWidth()), height = Number(view.getHeight());
+                            var shown = !!visible && view.isShown() && width > 0 && height > 0;
+                            var signature = x + "," + y + "," + width + "," + height + "," + shown;
+                            if (signature === lastGeometry) return;
+                            lastGeometry = signature;
+                            var intent = IntentWidget.$new("ru.big.town.anative.WIDGET_GEOMETRY");
+                            intent.setClassName(OUR_PKG,
+                                "ru.big.town.anative.SetModesReceiverDynamic");
+                            intent.putExtra.overload("java.lang.String", "int").call(intent, "x", x);
+                            intent.putExtra.overload("java.lang.String", "int").call(intent, "y", y);
+                            intent.putExtra.overload("java.lang.String", "int").call(
+                                intent, "width", width);
+                            intent.putExtra.overload("java.lang.String", "int").call(
+                                intent, "height", height);
+                            intent.putExtra.overload("java.lang.String", "boolean").call(
+                                intent, "visible", shown);
+                            ctx().sendBroadcast(intent);
+                        } catch (publishError) {
+                            Log.w(TAG, "[widgets] geometry publish failed: " + publishError);
+                        }
+                    }
+                    republishWidgetGeometry = function () {
+                        if (latestWidgetView === null) return;
+                        lastGeometry = "";
+                        publish(latestWidgetView, latestWidgetView.isShown());
+                    };
+                    var layout = BigMediaCard.onLayout.overload(
+                        "boolean", "int", "int", "int", "int");
+                    layout.implementation = function () {
+                        var result = layout.apply(this, arguments);
+                        publish(this, true);
+                        return result;
+                    };
+                    var visibility = BigMediaCard.onWindowVisibilityChanged.overload("int");
+                    visibility.implementation = function (value) {
+                        var result = visibility.call(this, value);
+                        publish(this, Number(value) === 0);
+                        return result;
+                    };
+                    // Observer only: OEM dispatch always runs and its boolean result is returned.
+                    var dispatch = BigMediaCard.dispatchTouchEvent.overload("android.view.MotionEvent");
+                    dispatch.implementation = function (event) {
+                        var action = Number(event.getActionMasked());
+                        if (action === 0) downX = Number(event.getX());
+                        var result = dispatch.call(this, event);
+                        if (action === 1) {
+                            var dx = Number(event.getX()) - downX;
+                            if (Math.abs(dx) > Math.max(48, Number(this.getWidth()) * 0.15)) {
+                                var swipe = IntentWidget.$new("ru.big.town.anative.WIDGET_SWIPE");
+                                swipe.setClassName(OUR_PKG,
+                                    "ru.big.town.anative.SetModesReceiverDynamic");
+                                swipe.putExtra.overload("java.lang.String", "int").call(
+                                    swipe, "direction", dx < 0 ? 1 : -1);
+                                ctx().sendBroadcast(swipe);
+                            }
+                        }
+                        return result;
+                    };
+                    Log.i(TAG, "[widgets] BigMediaCard geometry/non-consuming swipe observer ready");
+                } catch (e) {
+                    Log.w(TAG, "[widgets] BigMediaCard geometry hook unavailable: " + e);
+                }
+            }
+
             refreshMediaConfig();
             installManagerHooks();
             installSourceHooks();
             installHomeSourceHooks();
             installMediaTabHooks();
             registerMediaReceiver();
+            installCustomWidgetGeometryHooks();
             refreshMediaState();
             installHomeWidgetHooks();
             setTimeout(installHomeWidgetHooks, 1200);

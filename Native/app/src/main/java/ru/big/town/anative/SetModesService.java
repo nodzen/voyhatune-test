@@ -117,22 +117,7 @@ public class SetModesService extends Service {
 
                 case MSG_LEAVE_CAR:
                     Log.i(TAG, "handleMessage() MSG_LEAVE_CAR");
-                    PowerHoldStatusTracker tracker = powerHoldStatusTracker;
-                    if (tracker == null) {
-                        Log.w(TAG, "Power Hold tracker is unavailable");
-                        break;
-                    }
-                    tracker.beginActivation(requestGeneration -> {
-                        AtomicReference<PowerHoldPolicy.Outcome> outcome =
-                                new AtomicReference<>(
-                                        PowerHoldPolicy.Outcome.TRANSPORT_FAILURE);
-                        ApplyEngine.postUserCommand("power hold", () -> {
-                            PowerHoldController controller = powerHoldController;
-                            if (controller != null) outcome.set(controller.activate());
-                            Log.i(TAG, "power hold activation outcome=" + outcome.get());
-                        }, () -> tracker.finishActivation(
-                                requestGeneration, outcome.get()));
-                    });
+                    activatePowerHold();
                     break;
 
                 case MSG_WASH_MODE:
@@ -196,7 +181,6 @@ public class SetModesService extends Service {
                     break;
 
                 case MSG_SPLIT_LAUNCH_VD: {
-                    if (!BuildConfig.IS_FULL) { Log.i(TAG, "MSG_SPLIT_LAUNCH_VD игнор (light-сборка)"); break; }
                     android.os.Bundle d = msg.getData();
                     String left = (d != null) ? d.getString("left") : null;
                     String right = (d != null) ? d.getString("right") : null;
@@ -250,6 +234,23 @@ public class SetModesService extends Service {
 
     private SharedPreferences prefs() {
         return getSharedPreferences("NativePrefs", Context.MODE_PRIVATE);
+    }
+
+    private void activatePowerHold() {
+        PowerHoldStatusTracker tracker = powerHoldStatusTracker;
+        if (tracker == null) {
+            Log.w(TAG, "Power Hold tracker is unavailable");
+            return;
+        }
+        tracker.beginActivation(requestGeneration -> {
+            AtomicReference<PowerHoldPolicy.Outcome> outcome = new AtomicReference<>(
+                    PowerHoldPolicy.Outcome.TRANSPORT_FAILURE);
+            ApplyEngine.postUserCommand("power hold", () -> {
+                PowerHoldController controller = powerHoldController;
+                if (controller != null) outcome.set(controller.activate());
+                Log.i(TAG, "power hold activation outcome=" + outcome.get());
+            }, () -> tracker.finishActivation(requestGeneration, outcome.get()));
+        });
     }
 
     /**
@@ -918,10 +919,8 @@ public class SetModesService extends Service {
         carSignalPowerBridge = new CarSignalPowerBridge(
                 this, mainHandler, this::handleOemPowerStateChanged);
         carSignalPowerBridge.start();
-        if (BuildConfig.IS_FULL) {
-            screenLiftTaskRestorer = new ScreenLiftTaskRestorer(getApplicationContext());
-            screenLiftTaskRestorer.register();
-        }
+        screenLiftTaskRestorer = new ScreenLiftTaskRestorer(getApplicationContext());
+        screenLiftTaskRestorer.register();
         // Приёмник запроса снимка логов + восстановление захвата регистрируем в onCreate
         // (срабатывает и при простом bind, не только при startService).
         try {
@@ -1292,6 +1291,9 @@ public class SetModesService extends Service {
         createNotificationChannel();
         startForeground(1, notification);
 
+        boolean activatePowerHoldFromWidget = intent != null
+                && intent.getIntExtra("widgetMessage", 0) == MSG_LEAVE_CAR;
+
         // Fallback-подписку на пробуждение через броадкасты держим ВСЕГДА (belt-and-suspenders),
         // а не только когда mCarPowerManager==null: слушатель питания может «протухнуть» при
         // рестарте CarService, и тогда единственным триггером остаётся SCREEN_ON/GARAGE_MODE_OFF.
@@ -1332,6 +1334,7 @@ public class SetModesService extends Service {
         } else {
             Log.i(TAG, "onStartCommand(): already initialized");
         }
+        if (activatePowerHoldFromWidget) mainHandler.post(this::activatePowerHold);
         //if(action.equals("ru.big.town.anative.APPLY_DRIVE_MODES")){
         //  Log.i(TAG, "onStartCommand() Intent is ru.big.town.anative.APPLY_DRIVE_MODES!");
         //LocalBroadcastManager.getInstance(this).sendBroadcast(new Intent("ru.big.town.anative.APPLY_DRIVE_MODES"));

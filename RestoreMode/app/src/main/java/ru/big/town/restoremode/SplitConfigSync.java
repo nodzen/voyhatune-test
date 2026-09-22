@@ -24,6 +24,7 @@ final class SplitConfigSync {
         pushSteering(context, prefs);
         pushKeyboard(context, prefs);
         pushHomeWidgets(context, prefs);
+        pushClusterWidgets(context, prefs);
     }
 
     static void pushFrozenApps(Context context, SharedPreferences prefs) {
@@ -100,6 +101,16 @@ final class SplitConfigSync {
                 prefs.getBoolean("showInstrumentNowPlaying", true));
         i.putExtra("homeThirdPartyMedia",
                 prefs.getBoolean("homeThirdPartyMedia", true));
+        context.sendBroadcast(i);
+    }
+
+    static void pushClusterWidgets(Context context, SharedPreferences prefs) {
+        FeatureSettingsMigration.migrate(prefs);
+        Intent i = configIntent("ru.big.town.anative.CLUSTER_WIDGET_CONFIG");
+        i.putExtra("schemaVersion", FeatureSettingsMigration.CURRENT_SCHEMA);
+        i.putExtra("clusterGestureEnabled", prefs.getBoolean("clusterGestureEnabled", false));
+        i.putExtra("clusterAllowedPackages", ClusterAppStore.snapshotCsv(prefs));
+        i.putExtra("widgetCards", CustomWidgetStore.loadEncoded(prefs));
         context.sendBroadcast(i);
     }
 

@@ -10,8 +10,6 @@ ACTIVITY="$ROOT/RestoreMode/app/src/main/java/ru/big/town/restoremode/AdvanceAct
 LAYOUT="$ROOT/RestoreMode/app/src/main/res/layout/activity_advance.xml"
 FULL_INSTALL="$ROOT/Packaging/installer/full/install.sh"
 FULL_INSTALL_BAT="$ROOT/Packaging/installer/full/install.bat"
-LIGHT_INSTALL="$ROOT/Packaging/installer/light/install.sh"
-LIGHT_INSTALL_BAT="$ROOT/Packaging/installer/light/install.bat"
 
 fail() { echo "hook status/install test failed: $*" >&2; exit 1; }
 require() { grep -Fq -- "$2" "$1" || fail "$1: missing $2"; }
@@ -48,7 +46,7 @@ require "$CONTRACT" 'AUTHORITY = "ru.big.town.restoremode.restoremodecontentprov
 require "$CONTRACT" 'METHOD_PUBLISH = "publishHookStatusV1"'
 require "$APP_MANIFEST" 'android:authorities="ru.big.town.restoremode.restoremodecontentprovider"'
 require "$LAYOUT" 'android:id="@+id/textHookStatus"'
-require "$ACTIVITY" 'HookStatusContract.renderForUi(hookPayload, BuildConfig.IS_FULL)'
+require "$ACTIVITY" 'HookStatusContract.renderForUi(hookPayload)'
 require "$ACTIVITY" 'activityResumed && currentSection == 6'
 require "$ACTIVITY" 'SYSTEM_METRICS_INTERVAL_MS = 5_000L'
 
@@ -57,7 +55,7 @@ watchdog_loop_line=$(grep -n '^while \[ 1 \]; do$' "$LOADER" | tail -n1 | cut -d
 [ -n "$startup_publish_line" ] && [ "$startup_publish_line" -lt "$watchdog_loop_line" ] \
     || fail "initial status must be published before the injection watchdog loop"
 
-for installer in "$FULL_INSTALL" "$LIGHT_INSTALL"; do
+for installer in "$FULL_INSTALL"; do
     require "$installer" 'setprop ctl.stop voyahtune_load'
     require "$installer" 'getprop init.svc.voyahtune_load'
     forbid "$installer" 'pgrep -f'
