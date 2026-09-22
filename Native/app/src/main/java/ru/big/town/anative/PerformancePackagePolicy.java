@@ -1,5 +1,7 @@
 package ru.big.town.anative;
 
+import android.content.pm.PackageManager;
+
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
@@ -22,6 +24,9 @@ final class PerformancePackagePolicy {
             "bluetooth", "audio", "launcher", "systemui", "instrument", "cluster",
             "systempolicy", "canbus", "carsignal", "power", "tbox", "telematics"
     };
+    private static final Set<String> REQUIRED_ENABLED = new HashSet<>(Arrays.asList(
+            "com.qinggan.tbox.service"
+    ));
 
     private PerformancePackagePolicy() {}
 
@@ -32,5 +37,17 @@ final class PerformancePackagePolicy {
         return true;
     }
 
+    static boolean mustRemainEnabled(String packageName) {
+        return packageName != null && REQUIRED_ENABLED.contains(packageName.trim());
+    }
+
+    static boolean needsEnableRecovery(String packageName, int enabledState) {
+        return mustRemainEnabled(packageName)
+                && enabledState != PackageManager.COMPONENT_ENABLED_STATE_DEFAULT
+                && enabledState != PackageManager.COMPONENT_ENABLED_STATE_ENABLED;
+    }
+
     static Set<String> candidates() { return new HashSet<>(OPTIONAL); }
+
+    static Set<String> requiredEnabledPackages() { return new HashSet<>(REQUIRED_ENABLED); }
 }

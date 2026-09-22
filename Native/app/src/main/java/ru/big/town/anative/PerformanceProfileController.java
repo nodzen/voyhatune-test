@@ -52,6 +52,10 @@ final class PerformanceProfileController {
     private static String applyInternal(Context app) throws Exception {
         PackageManager pm = app.getPackageManager();
         SharedPreferences saved = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        String recoveryFailure = recoverRequiredPackages(pm, saved);
+        if (recoveryFailure != null) {
+            return "Профиль не применён: не удалось восстановить " + recoveryFailure;
+        }
         HealthSnapshot baseline = HealthSnapshot.capture(app);
         if (!baseline.ready) return "Профиль не применён: базовая проверка системы не пройдена";
         List<String> candidates = new ArrayList<>(PerformancePackagePolicy.candidates());
@@ -80,6 +84,7 @@ final class PerformanceProfileController {
 
     private static String restoreInternal(Context app) throws Exception {
         SharedPreferences saved = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        String recoveryFailure = recoverRequiredPackages(app.getPackageManager(), saved);
         int restored = 0;
         SharedPreferences.Editor editor = saved.edit();
         for (String pkg : PerformancePackagePolicy.candidates()) {
@@ -96,6 +101,9 @@ final class PerformanceProfileController {
         int pending = 0;
         for (String pkg : PerformancePackagePolicy.candidates()) {
             if (saved.contains("state." + pkg)) pending++;
+        }
+        if (recoveryFailure != null) {
+            return "Восстановлено: " + restored + "; не удалось включить " + recoveryFailure;
         }
         return pending == 0 ? "Восстановлено: " + restored + " пакетов"
                 : "Восстановлено: " + restored + "; требуют повтора: " + pending;
@@ -117,11 +125,30 @@ final class PerformanceProfileController {
         return run("pm", "disable-user", "--user", "0", pkg);
     }
 
+    private static String recoverRequiredPackages(PackageManager pm, SharedPreferences saved)
+            throws Exception {
+        for (String pkg : PerformancePackagePolicy.requiredEnabledPackages()) {
+            if (!installed(pm, pkg)) continue;
+            int state = pm.getApplicationEnabledSetting(pkg);
+            if (PerformancePackagePolicy.needsEnableRecovery(pkg, state)) {
+                CommandResult result = run("pm", "enable", "--user", "0", pkg);
+                if (!result.success) return pkg;
+            }
+            // A pre-Full-only build may have persisted TBox as an optional package. Once the
+            // package is confirmed enabled, discard that stale rollback state so Restore All can
+            // never disable it again.
+            saved.edit().remove("state." + pkg).commit();
+        }
+        return null;
+    }
+
     private static boolean protectedPackagesHealthy(Context app) {
         PackageManager pm = app.getPackageManager();
-        String[] protectedPackages = {"com.qinggan.app.launcher", "com.android.systemui",
+        List<String> protectedPackages = new ArrayList<>(java.util.Arrays.asList(
+                "com.qinggan.app.launcher", "com.android.systemui",
                 "com.qinggan.systempolicy", "com.qinggan.carsignal.service",
-                "com.qinggan.cluster", "com.android.bluetooth"};
+                "com.qinggan.cluster", "com.android.bluetooth"));
+        protectedPackages.addAll(PerformancePackagePolicy.requiredEnabledPackages());
         for (String pkg : protectedPackages) {
             if (installed(pm, pkg)) {
                 int state = pm.getApplicationEnabledSetting(pkg);
