@@ -281,7 +281,6 @@ bash Utils/android11-oem-stubs/tests/static-checks.sh
 | `hownews.md` | История изменений, новейшее сверху |
 | `Docs/can.pdf`, `Docs/CAN-команды.odt` | Справочные CAN-команды и сигналы |
 | `Docs/TRACE/` | Трейсы Java и C при разборе проблем |
-| `AGENTS.md` | Правила работы с репозиторием и список граблей. Локальный файл, под контроль версий не выносится |
 
 Известный пробел: `Packaging/README.md` ссылается на
 `Docs/multidisplay-transfer-audit.md` как на разбор многодисплейного переноса, но самого файла в
