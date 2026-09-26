@@ -139,22 +139,77 @@ rc_service_line=$(grep -nF 'service voyahtune_load ' "$LOAD_RC" | cut -d: -f1)
 # inherited from firmware or a third-party tool, silently breaks the keyboard hooks. Both installers
 # and the boot-time RC body must set AND verify the modes, not just create the directories.
 LOAD_SH="$REPO_ROOT/Packaging/system/voyahtune.load.sh"
-for DIR_MODE in 'chmod 00751 /data/local ' 'chmod 00755 /data/local/bin ' 'chmod 00771 /data/local/tmp '; do
+for DIR_MODE in 'chmod 00751 /data/local' 'chmod 00755 /data/local/bin' 'chmod 00771 /data/local/tmp'; do
     require_fixed "$LOAD_SH" "$DIR_MODE"
     require_fixed "$FULL_INSTALL" "$DIR_MODE"
     require_fixed "$FULL_INSTALL_BAT" "$DIR_MODE"
 done
-for DIR_STAT in \
-        'stat -c %a:%u:%g /data/local' \
-        'stat -c %a:%u:%g /data/local/bin' \
-        'stat -c %a:%u:%g /data/local/tmp'; do
-    require_fixed "$LOAD_SH" "$DIR_STAT"
-    require_fixed "$FULL_INSTALL" "$DIR_STAT"
-    # adb.exe passes the command through the Windows command parser, so '%' must be doubled.
-    require_fixed "$FULL_INSTALL_BAT" "$(printf '%s' "$DIR_STAT" | sed 's/%/%%/g')"
+for DIR_CHOWN in 'chown 0:0 /data/local /data/local/bin' 'chown 2000:2000 /data/local/tmp'; do
+    require_fixed "$LOAD_SH" "$DIR_CHOWN"
+    require_fixed "$FULL_INSTALL" "$DIR_CHOWN"
+    require_fixed "$FULL_INSTALL_BAT" "$DIR_CHOWN"
 done
+# The read-back is parameterised now, so pin the expectations where they live: three calls in the
+# RC body, one spec list in the Unix installer, two explicit reads in the Windows one.
+require_fixed "$LOAD_SH" 'stat -c %a:%u:%g "$1"'
+for DIR_EXPECT in 'check_data_dir /data/local 751:0:0' \
+        'check_data_dir /data/local/bin 755:0:0' \
+        'check_data_dir /data/local/tmp 771:2000:2000'; do
+    require_fixed "$LOAD_SH" "$DIR_EXPECT"
+done
+for DIR_SPEC in '/data/local:751:0:0' '/data/local/bin:755:0:0' '/data/local/tmp:771:2000:2000'; do
+    require_fixed "$FULL_INSTALL" "$DIR_SPEC"
+done
+require_fixed "$FULL_INSTALL" "stat -c %a:%u:%g '\$DD_PATH'"
+require_fixed "$FULL_INSTALL_BAT" "stat -c %%a:%%u:%%g /data/local')"
+require_fixed "$FULL_INSTALL_BAT" "stat -c %%a:%%u:%%g /data/local/tmp')"
+# The read-back must never gate the loader or the installer. toybox renders the octal mode as
+# 751 or 0751 depending on the build, so a strict string comparison would abort the loader
+# (killing the whole Frida layer) or block the install over a formatting difference alone.
+# chown/chmod already return non-zero on a real failure, so they are the authoritative check.
+# The fatal permission block must contain no read-back at all. Extract it and inspect, rather than
+# pattern-matching: '?' is a literal in POSIX BRE, so a regex guard here would silently pass.
+fatal_block=$(awk '
+    /^prepare_data_directories\(\) \{/ { capture = 1 }
+    capture && /^\}/ { print; exit }
+    capture { print }
+' "$LOAD_SH")
+[ -n "$fatal_block" ] || fail "cannot extract prepare_data_directories"
+case "$fatal_block" in
+    *stat*) fail "prepare_data_directories reads modes back; only chmod/chown may decide success" ;;
+esac
+for CHMOD_STEP in 'chmod 00751 /data/local' 'chmod 00755 /data/local/bin' 'chmod 00771 /data/local/tmp'; do
+    case "$fatal_block" in
+        *"$CHMOD_STEP"*) ;;
+        *) fail "prepare_data_directories is missing: $CHMOD_STEP" ;;
+    esac
+done
+install_fatal=$(awk '
+    /chmod 00751 \/data\/local/ { capture = 1 }
+    capture && /^\047;/ { exit }
+    capture { print }
+' "$FULL_INSTALL")
+[ -n "$install_fatal" ] || fail "cannot extract the installer permission block"
+case "$install_fatal" in
+    *stat*) fail "the installer decides success from a mode read-back; only chmod/chown may" ;;
+esac
+if grep -A2 'chmod 00771 /data/local/tmp' "$FULL_INSTALL_BAT" | tr -d '\r' | grep -q 'test x'; then
+    fail "Windows installer gates on the directory mode read-back"
+fi
+# This script runs with DisableDelayedExpansion, so !VAR! would never expand and the warning
+# would fire on every install.
+if grep -q '!DD_LOCAL!\|!DD_TMP!' "$FULL_INSTALL_BAT"; then
+    fail "install.bat uses !VAR! under DisableDelayedExpansion"
+fi
+require_fixed "$LOAD_SH" 'unexpected mode $1'
 require_fixed "$LOAD_SH" 'chown 0:0 /data/local /data/local/bin'
 require_fixed "$LOAD_SH" 'chown 2000:2000 /data/local/tmp'
+# The last statement of the fatal chain must be a chmod, not a read-back comparison.
+for DIR_FILE in "$LOAD_SH" "$FULL_INSTALL" "$FULL_INSTALL_BAT"; do
+    if grep -A2 'chmod 00771 /data/local/tmp' "$DIR_FILE" | grep -q 'test x[$]?('; then
+        fail "$(basename "$DIR_FILE"): read-back chained into the fatal permission block"
+    fi
+done
 # chmod must never recurse: agent configs stay 0644 and root worker state stays private.
 if grep -Eq 'chmod -R|chmod --recursive' "$LOAD_SH" "$FULL_INSTALL" "$FULL_INSTALL_BAT"; then
     fail "data directory preparation must not chmod recursively"

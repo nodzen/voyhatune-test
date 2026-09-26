@@ -119,8 +119,15 @@ echo   Old agent, markers, and keys removed. The new Apollo hook stays off until
 
 echo === Frida infrastructure ^(steering wheel + VirtualDisplay + boot-scoped Apollo^) ===
 rem Agents run as the target UID; fix parent traversal and clear inherited special bits.
-adb.exe shell "mkdir -p /data/local/bin /data/local/tmp && chown 0:0 /data/local /data/local/bin && chown 2000:2000 /data/local/tmp && chmod 00751 /data/local && chmod 00755 /data/local/bin && chmod 00771 /data/local/tmp && test x$(stat -c %%a:%%u:%%g /data/local) = x751:0:0 && test x$(stat -c %%a:%%u:%%g /data/local/bin) = x755:0:0 && test x$(stat -c %%a:%%u:%%g /data/local/tmp) = x771:2000:2000"
+rem Only the permission change is fatal; the read-back is diagnostic because toybox may print
+rem the mode as 751 or 0751 and a formatting difference must not block the installation.
+adb.exe shell "mkdir -p /data/local/bin /data/local/tmp && chown 0:0 /data/local /data/local/bin && chown 2000:2000 /data/local/tmp && chmod 00751 /data/local && chmod 00755 /data/local/bin && chmod 00771 /data/local/tmp"
 if errorlevel 1 exit /b 1
+rem Delayed expansion is disabled in this script, so read the values back with %VAR%.
+for /F "tokens=1,2,3" %%A in ('adb.exe shell stat -c %%a:%%u:%%g /data/local') do set "DD_LOCAL=%%A"
+for /F "tokens=1,2,3" %%A in ('adb.exe shell stat -c %%a:%%u:%%g /data/local/tmp') do set "DD_TMP=%%A"
+if not "%DD_LOCAL%" == "751:0:0" echo   WARNING: /data/local mode is [%DD_LOCAL%], expected 751:0:0
+if not "%DD_TMP%" == "771:2000:2000" echo   WARNING: /data/local/tmp mode is [%DD_TMP%], expected 771:2000:2000
 call :install_required_data_file load.bin /data/local/bin/load.bin 755
 if errorlevel 1 exit /b 1
 call :install_required_data_file steeringwheelkeys.js /data/local/bin/steeringwheelkeys.js 644
@@ -782,4 +789,4 @@ if errorlevel 1 (
 ) else (
     echo !!! Boot hook verification failed. The previous version was restored.
 )
-exit /b 1
+exit /b 1

@@ -618,20 +618,28 @@ echo "  Старый agent, маркеры и ключи удалены; нов�
 echo "=== Frida-инфраструктура (руль + VirtualDisplay + boot-scoped Apollo) ==="
 # Frida agents run under the target process UID: readable files also need traversable parents.
 # Five octal digits explicitly clear inherited setgid/sticky bits on directories.
+# Only the permission change is fatal: chown/chmod already return non-zero on a real failure.
+# The read-back below is diagnostic, because toybox renders %a as 751 or 0751 depending on the
+# build and a formatting difference must not block the whole installation.
 if ! adb shell '
 mkdir -p /data/local/bin /data/local/tmp &&
 chown 0:0 /data/local /data/local/bin &&
 chown 2000:2000 /data/local/tmp &&
 chmod 00751 /data/local &&
 chmod 00755 /data/local/bin &&
-chmod 00771 /data/local/tmp &&
-test x$(stat -c %a:%u:%g /data/local) = x751:0:0 &&
-test x$(stat -c %a:%u:%g /data/local/bin) = x755:0:0 &&
-test x$(stat -c %a:%u:%g /data/local/tmp) = x771:2000:2000
+chmod 00771 /data/local/tmp
 '; then
-    echo "!!! Не удалось установить/проверить права /data/local, bin и tmp — установка прервана."
+    echo "!!! Не удалось установить права /data/local, bin и tmp — установка прервана."
     exit 1
 fi
+for DD in "/data/local:751:0:0" "/data/local/bin:755:0:0" "/data/local/tmp:771:2000:2000"; do
+    DD_PATH=${DD%:*}
+    DD_WANT=${DD##*:}
+    DD_GOT=$(adb shell "stat -c %a:%u:%g '$DD_PATH' 2>/dev/null" | tr -d '\r')
+    if [ "$DD_GOT" != "$DD_WANT" ]; then
+        echo "  ВНИМАНИЕ: $DD_PATH имеет режим [$DD_GOT], ожидался [$DD_WANT]."
+    fi
+done
 install_required_data_file load.bin /data/local/bin/load.bin 755 || exit 1
 install_required_data_file steeringwheelkeys.js /data/local/bin/steeringwheelkeys.js 644 || exit 1
 install_required_data_file launcherdock.js /data/local/bin/launcherdock.js 644 || exit 1
