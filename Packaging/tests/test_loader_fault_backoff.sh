@@ -108,6 +108,37 @@ rc_service_line=$(grep -nF 'service voyahtune_load ' "$LOAD_RC" | cut -d: -f1)
     && [ "$rc_enable_line" -lt "$rc_service_line" ] \
     || fail "loader is enabled before synchronous post-fs-data setenforce"
 
+# A Frida agent runs under the UID of the target process, so a 0644 agent config is useless unless
+# every parent directory is traversable for that UID. A 2700/0700 /data/local or /data/local/bin,
+# inherited from firmware or a third-party tool, silently breaks the keyboard hooks. Both installers
+# and the boot-time RC body must set AND verify the modes, not just create the directories.
+LOAD_SH="$REPO_ROOT/Packaging/system/voyahtune.load.sh"
+for DIR_MODE in 'chmod 00751 /data/local ' 'chmod 00755 /data/local/bin ' 'chmod 00771 /data/local/tmp '; do
+    require_fixed "$LOAD_SH" "$DIR_MODE"
+    require_fixed "$FULL_INSTALL" "$DIR_MODE"
+    require_fixed "$FULL_INSTALL_BAT" "$DIR_MODE"
+done
+for DIR_STAT in \
+        'stat -c %a:%u:%g /data/local' \
+        'stat -c %a:%u:%g /data/local/bin' \
+        'stat -c %a:%u:%g /data/local/tmp'; do
+    require_fixed "$LOAD_SH" "$DIR_STAT"
+    require_fixed "$FULL_INSTALL" "$DIR_STAT"
+    # adb.exe passes the command through the Windows command parser, so '%' must be doubled.
+    require_fixed "$FULL_INSTALL_BAT" "$(printf '%s' "$DIR_STAT" | sed 's/%/%%/g')"
+done
+require_fixed "$LOAD_SH" 'chown 0:0 /data/local /data/local/bin'
+require_fixed "$LOAD_SH" 'chown 2000:2000 /data/local/tmp'
+# chmod must never recurse: agent configs stay 0644 and root worker state stays private.
+if grep -Eq 'chmod -R|chmod --recursive' "$LOAD_SH" "$FULL_INSTALL" "$FULL_INSTALL_BAT"; then
+    fail "data directory preparation must not chmod recursively"
+fi
+# The Windows installer must stay pure ASCII and use doubled percent signs for adb.exe stat.
+if LC_ALL=C tr -d '\11\12\15\40-\176' < "$FULL_INSTALL_BAT" | grep -q .; then
+    fail "install.bat contains non-ASCII or control bytes"
+fi
+require_fixed "$FULL_INSTALL_BAT" 'stat -c %%a:%%u:%%g /data/local'
+
 for FORBIDDEN in \
         'INJECT_RETRY_INITIAL' \
         'INJECT_RETRY_MAX' \

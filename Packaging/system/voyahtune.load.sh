@@ -6,7 +6,26 @@ LOG_TAG="vt_load_sh"
 logi () { /system/bin/log -t $LOG_TAG -p i "$@"; }
 
 # /data/local/bin — доступно рано при загрузке; /sdcard монтируется позже, там load.bin держать нельзя.
-mkdir -p /data/local/bin/
+# Восстанавливаем права до инъекции: агент Frida работает под UID целевого процесса, поэтому
+# читаемый файл бесполезен без прохода по родительским каталогам. Режим 2700, унаследованный от
+# прошивки или стороннего инструмента, ломает клавиатурные агенты при конфиге 0644.
+# chmod НЕ рекурсивный: конфиги агентов остаются 0644, root-состояние воркеров — приватным.
+# Пять октальных цифр явно снимают унаследованные setgid/sticky биты с каталогов.
+prepare_data_directories() {
+    mkdir -p /data/local/bin /data/local/tmp &&
+    chown 0:0 /data/local /data/local/bin &&
+    chown 2000:2000 /data/local/tmp &&
+    chmod 00751 /data/local &&
+    chmod 00755 /data/local/bin &&
+    chmod 00771 /data/local/tmp &&
+    test x$(stat -c %a:%u:%g /data/local) = x751:0:0 &&
+    test x$(stat -c %a:%u:%g /data/local/bin) = x755:0:0 &&
+    test x$(stat -c %a:%u:%g /data/local/tmp) = x771:2000:2000
+}
+if ! prepare_data_directories; then
+    logi "cannot prepare /data/local, bin and tmp permissions"
+    exit 1
+fi
 
 logi "starting load.bin watchdog"
 exec /system/bin/sh /data/local/bin/load.bin >> /data/local/tmp/voyahtune_load.txt 2>&1
