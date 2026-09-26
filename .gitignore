@@ -2,7 +2,10 @@
 bind_dir.sh
 copy_apk.sh
 readme.md.backup
-#*.apk
+# Собранные APK никогда не коммитятся: сборочный вывод воспроизводится из исходников.
+# Явное исключение — vendor-overlay, он часть исходника релиза.
+*.apk
+!Packaging/vendor-overlay/*.apk
 *.aar
 *.ap_
 *.aab
@@ -28,6 +31,11 @@ local.properties
 proguard/
 # Log Files
 *.log
+# Сырые захваты logcat/скриптов из Utils/log — рабочий мусор, а не исходники.
+# Инструменты (readlog.sh, bcast_history.sh) остаются под контролем версий.
+Utils/log/*
+!Utils/log/readlog.sh
+!Utils/log/bcast_history.sh
 # Android Studio Navigation editor temp files
 .navigation/
 # Android Studio captures folder
