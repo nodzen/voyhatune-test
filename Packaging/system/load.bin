@@ -893,6 +893,16 @@ inject_keymanager_bg() {
     (
         # Не наследуем loader traps: worker живёт не дольше timeout+KILL и сам чистит busy.
         trap - 0 HUP INT TERM
+        # fork добавляет задержку, за это время keymanager мог перезапуститься. Инжектить уже не
+        # ту identity бессмысленно: адресат уехал, а маркер достался бы чужому процессу.
+        KM_ID_BEFORE=$(process_identity "$KM_TARGET_PID" com.qinggan.keymanager.service 2>/dev/null) \
+            || KM_ID_BEFORE=
+        if [ "$KM_ID_BEFORE" != "$KM_TARGET_ID" ]; then
+            logi "inject skipped keymanager: target identity changed pid=$KM_TARGET_PID"
+            [ "$(readlink "$SWK_KM_BUSY" 2>/dev/null)" = "$KM_RECORD" ] \
+                && rm -f "$SWK_KM_BUSY"
+            exit 1
+        fi
         KM_TRY="/data/local/tmp/voyahtune_swk.try"
         : > "$KM_TRY"
         timeout -k 5 30 "$FI" -p "$KM_TARGET_PID" -s "$SWK" -e > "$KM_TRY" 2>&1
@@ -900,7 +910,7 @@ inject_keymanager_bg() {
         cat "$KM_TRY" >> /data/local/tmp/voyahtune_swk.txt
         if grep -qiE 'unable to find|not found|failed to|cannot parse|no such process|error resolving' "$KM_TRY"; then
             loge "inject FAIL keymanager pid=$KM_TARGET_PID rc=$KM_RC (latched; no retry)"
-        elif [ "$KM_RC" -eq 0 ] || grep -qF '[swk] keymanager hooks installed:' "$KM_TRY"; then
+        elif grep -qF '[swk] keymanager hooks installed:' "$KM_TRY"; then
             KM_ID_AFTER=$(process_identity "$KM_TARGET_PID" com.qinggan.keymanager.service 2>/dev/null) \
                 || KM_ID_AFTER=
             if [ "$KM_ID_AFTER" = "$KM_TARGET_ID" ]; then

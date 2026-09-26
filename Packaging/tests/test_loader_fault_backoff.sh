@@ -83,6 +83,32 @@ if grep -Fq 'inject_ret "$MDP"' "$LOAD_BIN"; then
     fail "multidisplay still uses exit-code-based generic injector"
 fi
 
+# Steering readiness must be proven by the agent itself. Log.i() only reaches logcat and never
+# appears on frida-inject's stdout, so a stdout grep is unsatisfiable while the injector's exit
+# code only means "frida started", not "the agent installed its hooks".
+STEERING="$REPO_ROOT/Packaging/inject/steeringwheelkeys.js"
+require_fixed "$STEERING" 'var ready = "[swk] keymanager hooks installed:'
+require_fixed "$STEERING" 'Log.i(TAG, ready);'
+require_fixed "$STEERING" 'console.log(ready);'
+require_fixed "$LOAD_BIN" "grep -qF '[swk] keymanager hooks installed:' \"\$KM_TRY\""
+if grep -Fq '[ "$KM_RC" -eq 0 ] ||' "$LOAD_BIN"; then
+    fail "steering injection still trusts the injector exit code instead of the ready marker"
+fi
+# The worker forks before injecting, so the target identity must be re-checked after the fork.
+km_worker=$(awk '
+    /^inject_keymanager_bg\(\) \{/ { capture = 1 }
+    capture && /^\}$/ { print; exit }
+    capture { print }
+' "$LOAD_BIN")
+[ -n "$km_worker" ] || fail "cannot extract the keymanager background injector"
+km_recheck_line=$(printf '%s\n' "$km_worker" | grep -nF 'KM_ID_BEFORE=$(process_identity' | cut -d: -f1)
+km_guard_line=$(printf '%s\n' "$km_worker" | grep -nF 'if [ "$KM_ID_BEFORE" != "$KM_TARGET_ID" ]; then' | cut -d: -f1)
+km_inject_line=$(printf '%s\n' "$km_worker" | grep -nF 'timeout -k 5 30 "$FI"' | cut -d: -f1)
+[ -n "$km_recheck_line" ] && [ -n "$km_guard_line" ] && [ -n "$km_inject_line" ] \
+    || fail "keymanager worker has no pre-inject identity re-check"
+[ "$km_recheck_line" -lt "$km_guard_line" ] && [ "$km_guard_line" -lt "$km_inject_line" ] \
+    || fail "keymanager identity re-check must run before frida-inject"
+
 # init safety: post-fs-data guarantees mounted /data, while class late_start remains the second
 # barrier. The version marker forces an existing boot_completed-gated RC to be upgraded.
 for REQUIRED in \

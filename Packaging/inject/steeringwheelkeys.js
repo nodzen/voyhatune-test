@@ -389,7 +389,12 @@ Java.perform(function () {
         };
         discoverReader(0);
         installMediaProxyReceiver(0);
-        Log.i(TAG, "[swk] keymanager hooks installed: STAR DVR VOICE PHONE media=3/4/6 (LONG_MS=" + LONG_MS + ")");
+        // Log.i() пишет только в logcat и до stdout frida-inject не доходит, поэтому загрузчик не
+        // может убедиться, что агент реально выполнился. Дублируем маркер в stdout: только он
+        // делает инъекцию подтверждённой, код возврата инжектора таким доказательством не является.
+        var ready = "[swk] keymanager hooks installed: STAR DVR VOICE PHONE media=3/4/6 (LONG_MS=" + LONG_MS + ")";
+        Log.i(TAG, ready);
+        console.log(ready);
     } catch (e) {
         // Если класс не найден (скрипт заинжектили не в keymanager) — просто ничего не делаем.
         Log.e(TAG, "[swk] KeyManagerReader not found (not keymanager?): " + e);
