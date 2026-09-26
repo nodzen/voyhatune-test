@@ -333,4 +333,67 @@ record_md_injection_failure "$MD_MISSING_ID" "$MD_MISSING_FILE" 1 ready_marker_m
 [ "$(cat "$MD_MISSING_FILE")" = "$MD_MISSING_ID|1|307" ] \
     || fail "missing ready marker did not receive the sentinel-safe 2s retry"
 
+# mksh (the Android /system/bin/sh) and ksh93 read an unescaped '|' inside a ${...} pattern as a
+# pattern ALTERNATION, not as a literal. For a '|'-delimited record that turns %%|* into "strip the
+# whole string" and #*| into "strip nothing", so every well-formed record fails its own validity
+# check. The retry budget, the busy-lock TTLs and the crash-loop guard all become unreachable, and
+# the loop above cannot see it because bash and dash treat the pipe literally.
+unescaped_pipes=$(awk '
+    {
+        line = $0
+        n = length(line)
+        i = 1
+        while (i <= n) {
+            if (substr(line, i, 2) != "${") { i++; continue }
+            depth = 0
+            j = i + 2
+            while (j <= n) {
+                c = substr(line, j, 1)
+                if (c == "\\") { j += 2; continue }
+                if (c == "{") { depth++ }
+                else if (c == "}") { if (depth == 0) break; depth-- }
+                else if (c == "|" && depth == 0) {
+                    printf "%s:%d: unescaped %s in expansion\n", FILENAME, FNR, "|"
+                }
+                j++
+            }
+            i = j + 1
+        }
+    }
+' "$LOAD_BIN")
+[ -z "$unescaped_pipes" ] \
+    || fail "record delimiters must be escaped for Android mksh:
+$unescaped_pipes"
+
+# Exercise the real parser under a ksh-family shell when one is available, so the escaping is
+# validated against the semantics that actually differ from the host shell.
+KSH_CANDIDATE=''
+for CANDIDATE in /bin/ksh /usr/bin/ksh /bin/mksh; do
+    if [ -x "$CANDIDATE" ]; then KSH_CANDIDATE=$CANDIDATE; break; fi
+done
+if [ -n "$KSH_CANDIDATE" ]; then
+    KSH_PROBE="$TMP_DIR/mksh-probe.sh"
+    {
+        echo 'MD_MAX_ATTEMPTS=3'
+        printf '%s\n' "$md_retry_functions"
+        cat <<'PROBE'
+PROBE_RECORD="$1"
+if read_md_attempt_record "$PROBE_RECORD"; then
+    printf 'OK %s %s %s\n' "$MD_RECORD_ID" "$MD_RECORD_COUNT" "$MD_RECORD_NEXT"
+else
+    echo BROKEN
+fi
+PROBE
+    } > "$KSH_PROBE"
+    printf '%s\n' "$MD_ID|1|120" > "$TMP_DIR/ksh-valid.attempt"
+    printf '%s\n' 'not-a-record' > "$TMP_DIR/ksh-garbage.attempt"
+    KSH_VALID=$("$KSH_CANDIDATE" "$KSH_PROBE" "$TMP_DIR/ksh-valid.attempt")
+    KSH_GARBAGE=$("$KSH_CANDIDATE" "$KSH_PROBE" "$TMP_DIR/ksh-garbage.attempt")
+    [ "$KSH_VALID" = "OK $MD_ID 1 120" ] \
+        || fail "$KSH_CANDIDATE rejected a valid record as malformed: $KSH_VALID"
+    [ "$KSH_GARBAGE" = BROKEN ] \
+        || fail "$KSH_CANDIDATE accepted a malformed record: $KSH_GARBAGE"
+fi
+
 echo "PASS: generic hooks are one-shot; multidisplay alone has exact-ready bounded retry"
+echo "PASS: '|'-delimited loader records are escaped for Android mksh semantics"
